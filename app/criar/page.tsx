@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useRef } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import Link from "next/link"
 import Image from "next/image"
 import { Button } from "@/components/ui/button"
@@ -37,6 +37,9 @@ import {
   Mail,
   Plus,
   Crown,
+  Copy,
+  Download,
+  ExternalLink,
 } from "lucide-react"
 
 const mainRelationshipTypes = [
@@ -132,7 +135,7 @@ export default function CriarCartaPage() {
   const [selectedDecorations, setSelectedDecorations] = useState<string[]>([])
   const [selectedQrStyle, setSelectedQrStyle] = useState("simple")
   const [shareMethod, setShareMethod] = useState<"qr" | "link">("link")
-  const [selectedPlan, setSelectedPlan] = useState<"mensal" | "anual">("mensal")
+  const [selectedPlan, setSelectedPlan] = useState<"unico" | "mensal">("unico")
   const [countdownEnabled, setCountdownEnabled] = useState(false)
   const [togetherDate, setTogetherDate] = useState("")
   const [offerTimeLeft, setOfferTimeLeft] = useState(300) // 5 minutos
@@ -143,6 +146,14 @@ export default function CriarCartaPage() {
   const [isPaid, setIsPaid] = useState(false)
   const [isProcessingPayment, setIsProcessingPayment] = useState(false)
   const [generatedLink, setGeneratedLink] = useState("")
+  const [customerEmail, setCustomerEmail] = useState("")
+  const [pixCode, setPixCode] = useState("")
+  const [pixQrCodeBase64, setPixQrCodeBase64] = useState("")
+  const [paymentId, setPaymentId] = useState("")
+  const [cartaId, setCartaId] = useState("")
+  const [paymentStatus, setPaymentStatus] = useState<"pending" | "approved" | "rejected">("pending")
+  const [showPixPayment, setShowPixPayment] = useState(false)
+  const [copiedPix, setCopiedPix] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   
   const extraPhotosCount = Math.max(0, photos.length - FREE_PHOTO_LIMIT)
@@ -209,15 +220,24 @@ export default function CriarCartaPage() {
     }
   }
 
-  const handlePayment = async () => {
+  const getPaymentAmount = useCallback(() => {
+    const basePlan = selectedPlan === "unico" ? 17.89 : 39.89
+    return basePlan + extraPhotosCost
+  }, [selectedPlan, extraPhotosCost])
+
+  const handleCreatePayment = async () => {
+    if (!customerEmail || !customerEmail.includes('@')) {
+      alert('Por favor, insira um email valido')
+      return
+    }
+
     setIsProcessingPayment(true)
-    // Simular processamento de pagamento
-    await new Promise(resolve => setTimeout(resolve, 2500))
     
     // Gerar ID unico para a carta
     const uniqueId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36)
+    setCartaId(uniqueId)
     
-    // Salvar dados da carta no localStorage para demo
+    // Salvar dados da carta
     const cartaData = {
       id: uniqueId,
       partnerName,
@@ -231,14 +251,124 @@ export default function CriarCartaPage() {
       countdownEnabled,
       togetherDate,
       selectedRelationship,
+      email: customerEmail,
+      isPaid: false,
       createdAt: new Date().toISOString()
     }
+    
+    // Save to localStorage as backup
     localStorage.setItem(`carta_${uniqueId}`, JSON.stringify(cartaData))
+    
+    // Save to API
+    try {
+      await fetch('/api/cartas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cartaData)
+      })
+    } catch (error) {
+      console.error('Error saving carta:', error)
+    }
     
     const baseUrl = typeof window !== 'undefined' ? window.location.origin : ''
     setGeneratedLink(`${baseUrl}/carta/${uniqueId}`)
+    
+    try {
+      // Create Mercado Pago PIX payment
+      const response = await fetch('/api/mercadopago/create-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: getPaymentAmount(),
+          description: `Carta de Amor Digital - Lovra - ${selectedPlan === "unico" ? "Plano Unico" : "Plano Mensal"}`,
+          email: customerEmail,
+          cartaId: uniqueId,
+        })
+      })
+      
+      const payment = await response.json()
+      
+      if (payment.qr_code) {
+        setPixCode(payment.qr_code)
+        setPixQrCodeBase64(payment.qr_code_base64)
+        setPaymentId(payment.id)
+        setShowPixPayment(true)
+        setIsProcessingPayment(false)
+        
+        // Start polling for payment status
+        startPaymentStatusPolling(payment.id, uniqueId)
+      } else {
+        // Fallback for demo/testing without real Mercado Pago credentials
+        console.log('Mercado Pago not configured, using demo mode')
+        setShowPixPayment(true)
+        setPixCode(`00020126580014br.gov.bcb.pix0136${uniqueId}5204000053039865406${getPaymentAmount().toFixed(2)}5802BR5913Lovra Digital6008BRASILIA62070503***6304`)
+        setIsProcessingPayment(false)
+      }
+    } catch (error) {
+      console.error('Payment error:', error)
+      // Demo fallback
+      setShowPixPayment(true)
+      setPixCode(`00020126580014br.gov.bcb.pix0136${uniqueId}5204000053039865406${getPaymentAmount().toFixed(2)}5802BR5913Lovra Digital6008BRASILIA62070503***6304`)
+      setIsProcessingPayment(false)
+    }
+  }
+
+  const startPaymentStatusPolling = (paymentId: string, cartaIdParam: string) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/mercadopago/webhook?payment_id=${paymentId}`)
+        const data = await response.json()
+        
+        if (data.status === 'approved') {
+          clearInterval(pollInterval)
+          setPaymentStatus('approved')
+          setIsPaid(true)
+          
+          // Update carta payment status
+          const cartaData = localStorage.getItem(`carta_${cartaIdParam}`)
+          if (cartaData) {
+            const parsed = JSON.parse(cartaData)
+            parsed.isPaid = true
+            parsed.paymentId = paymentId
+            localStorage.setItem(`carta_${cartaIdParam}`, JSON.stringify(parsed))
+          }
+          
+          // Update via API
+          await fetch('/api/cartas', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: cartaIdParam, isPaid: true, paymentId })
+          })
+        } else if (data.status === 'rejected') {
+          clearInterval(pollInterval)
+          setPaymentStatus('rejected')
+        }
+      } catch (error) {
+        console.error('Error polling payment status:', error)
+      }
+    }, 3000) // Poll every 3 seconds
+    
+    // Stop polling after 10 minutes
+    setTimeout(() => clearInterval(pollInterval), 600000)
+  }
+
+  const handleDemoPayment = () => {
+    // For demo/testing purposes - simulate payment approval
+    setPaymentStatus('approved')
     setIsPaid(true)
-    setIsProcessingPayment(false)
+    
+    const cartaData = localStorage.getItem(`carta_${cartaId}`)
+    if (cartaData) {
+      const parsed = JSON.parse(cartaData)
+      parsed.isPaid = true
+      localStorage.setItem(`carta_${cartaId}`, JSON.stringify(parsed))
+    }
+  }
+
+  const copyPixCode = () => {
+    navigator.clipboard.writeText(pixCode)
+    setCopiedPix(true)
+    setTimeout(() => setCopiedPix(false), 2000)
   }
 
   const copyLink = () => {
@@ -347,7 +477,7 @@ export default function CriarCartaPage() {
   // Transition Animation Screen - Envelope Animation
   if (showTransition) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4 overflow-hidden">
+      <div className="min-h-screen bg-background flex items-center justify-center p-4 overflow-hidden">
         {/* Floating decorations all around */}
         <div className="absolute inset-0 pointer-events-none">
           {selectedDecorations.includes("hearts") && (
@@ -431,35 +561,22 @@ export default function CriarCartaPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header with Logo and Animated Hearts */}
-      <header className="py-3 px-4 md:px-6 flex items-center justify-between border-b border-border relative">
-        <Link href="/" className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors">
-          <ArrowLeft className="w-5 h-5" />
-          <span className="hidden sm:inline text-sm">Inicio</span>
+    <div className="min-h-screen bg-background relative">
+      {/* Subtle background glow */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/3 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-primary/2 rounded-full blur-3xl" />
+      </div>
+
+      {/* Header */}
+      <header className="relative z-10 py-3 px-4 md:px-6 flex items-center justify-between border-b border-border/50 bg-background/80 backdrop-blur-sm">
+        <Link href="/" className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors">
+          <ArrowLeft className="w-4 h-4" />
+          <span className="text-sm">Cancelar</span>
         </Link>
 
-        {/* Centered Logo with Animated Hearts */}
-        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2">
-          <div className="relative">
-            <Heart 
-              className="absolute -top-2 -left-3 w-3 h-3 text-primary/60 fill-primary/60 animate-bounce" 
-              style={{ animationDelay: "0s", animationDuration: "2s" }} 
-            />
-            <Heart 
-              className="absolute -top-1 -right-4 w-2.5 h-2.5 text-primary/40 fill-primary/40 animate-bounce" 
-              style={{ animationDelay: "0.5s", animationDuration: "2.5s" }} 
-            />
-            <Heart 
-              className="absolute -bottom-1 -left-4 w-2 h-2 text-primary/50 fill-primary/50 animate-bounce" 
-              style={{ animationDelay: "1s", animationDuration: "2.2s" }} 
-            />
-            <Heart 
-              className="absolute -bottom-2 -right-3 w-2.5 h-2.5 text-primary/30 fill-primary/30 animate-bounce" 
-              style={{ animationDelay: "0.3s", animationDuration: "1.8s" }} 
-            />
-            <Heart className="w-6 h-6 text-primary fill-primary" />
-          </div>
+        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5">
+          <Heart className="w-5 h-5 text-primary fill-primary" />
           <span className="text-lg font-bold text-foreground">Lovra</span>
         </div>
 
@@ -469,26 +586,63 @@ export default function CriarCartaPage() {
         </div>
       </header>
 
-      {/* Progress Bar */}
-      <div className="w-full bg-muted h-1">
-        <div
-          className="h-full bg-primary transition-all duration-500 ease-out"
-          style={{ width: `${(currentStep / TOTAL_STEPS) * 100}%` }}
-        />
+      {/* Progress Section */}
+      <div className="relative z-10 px-4 md:px-6 pt-4 max-w-6xl mx-auto">
+        {/* Step title + percentage */}
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 text-sm">
+            <Sparkles className="w-4 h-4 text-primary" />
+            <span className="text-foreground font-medium">
+              {currentStep === TOTAL_STEPS ? "Ultimo passo!" : `Vamos comecar!`}
+            </span>
+          </div>
+          <span className="text-sm font-bold text-primary">
+            {Math.round((currentStep / TOTAL_STEPS) * 100)}%
+          </span>
+        </div>
+
+        {/* Progress Bar */}
+        <div className="w-full bg-muted/60 h-2 rounded-full overflow-hidden mb-2">
+          <div
+            className="h-full bg-gradient-to-r from-primary to-primary/80 transition-all duration-500 ease-out rounded-full"
+            style={{ width: `${(currentStep / TOTAL_STEPS) * 100}%` }}
+          />
+        </div>
+
+        {/* Step dots */}
+        <div className="flex items-center justify-between px-1">
+          {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
+            <button
+              key={i}
+              onClick={() => i + 1 <= currentStep && goToStep(i + 1)}
+              className={`w-2.5 h-2.5 rounded-full transition-all duration-300 ${
+                i + 1 === currentStep
+                  ? "bg-primary scale-125 shadow-sm shadow-primary/50"
+                  : i + 1 < currentStep
+                  ? "bg-primary/50"
+                  : "bg-muted-foreground/20"
+              }`}
+            />
+          ))}
+        </div>
       </div>
 
       {/* Main Content */}
-      <main className="max-w-6xl mx-auto px-4 py-4 md:py-6">
+      <main className="relative z-10 max-w-6xl mx-auto px-4 py-4 md:py-6">
         {/* Step Indicator */}
         <div className="text-center mb-4 md:mb-6">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-primary/10 rounded-full text-sm text-primary mb-2">
-            <span className="font-medium">
-              {currentStep === TOTAL_STEPS ? "Ultimo passo!" : `Etapa ${currentStep} de ${TOTAL_STEPS}`}
-            </span>
-          </div>
-          <h1 className="text-lg md:text-2xl font-bold text-foreground text-balance">
+          <h1 className="text-xl md:text-3xl font-bold text-foreground text-balance font-serif">
             {getStepTitle()}
           </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {currentStep === 1 && "Como voce quer surpreender no Valentine's Day?"}
+            {currentStep === 2 && "Expresse seus sentimentos com palavras"}
+            {currentStep === 3 && "Adicione momentos especiais"}
+            {currentStep === 4 && "Deixe com a sua cara"}
+            {currentStep === 5 && "Detalhes que fazem a diferenca"}
+            {currentStep === 6 && "Escolha como enviar sua carta"}
+            {currentStep === 7 && (isPaid ? "Compartilhe com quem voce ama" : "Complete seu pedido")}
+          </p>
         </div>
 
         <div className="flex flex-col lg:flex-row gap-4 lg:gap-6">
@@ -501,7 +655,7 @@ export default function CriarCartaPage() {
                   <Label className="text-foreground text-sm font-medium mb-2 block">
                     Tipo de relacionamento
                   </Label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {mainRelationshipTypes.map((type) => {
                       const IconComponent = type.icon
                       const isSelected = selectedRelationship === type.id
@@ -509,13 +663,22 @@ export default function CriarCartaPage() {
                         <button
                           key={type.id}
                           onClick={() => setSelectedRelationship(type.id)}
-                          className={`p-3 rounded-xl border-2 transition-all duration-200 flex flex-col items-center gap-1.5 ${
+                          className={`relative p-4 rounded-2xl border-2 transition-all duration-200 flex flex-col items-center gap-2 ${
                             isSelected
-                              ? "border-primary bg-primary/5 text-primary"
-                              : "border-border bg-card text-muted-foreground hover:border-primary/50"
+                              ? "border-primary bg-primary/10 text-primary shadow-sm shadow-primary/10"
+                              : "border-border bg-card/60 text-muted-foreground hover:border-primary/40 hover:bg-card/80"
                           }`}
                         >
-                          <IconComponent className={`w-5 h-5 ${isSelected ? "text-primary" : ""}`} />
+                          {isSelected && (
+                            <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+                              <Check className="w-3 h-3 text-primary-foreground" />
+                            </div>
+                          )}
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                            isSelected ? "bg-primary/20" : "bg-secondary/60"
+                          }`}>
+                            <IconComponent className={`w-5 h-5 ${isSelected ? "text-primary fill-primary" : ""}`} />
+                          </div>
                           <span className="text-xs font-medium">{type.label}</span>
                         </button>
                       )
@@ -684,7 +847,7 @@ export default function CriarCartaPage() {
             {currentStep === 3 && (
               <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                 {/* Photo limit info */}
-                <div className={`rounded-lg p-3 ${photos.length >= FREE_PHOTO_LIMIT && !wantsExtraPhotos ? 'bg-amber-50 border border-amber-200' : 'bg-secondary/50'}`}>
+                <div className={`rounded-lg p-3 ${photos.length >= FREE_PHOTO_LIMIT && !wantsExtraPhotos ? 'bg-amber-500/10 border border-amber-500/30' : 'bg-secondary/50'}`}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <ImagePlus className="w-4 h-4 text-primary" />
@@ -1116,129 +1279,244 @@ export default function CriarCartaPage() {
             {currentStep === 7 && (
               <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                 {!isPaid ? (
-                  <>
-                    {/* Offer Timer */}
-                    <div className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground rounded-lg p-3 flex items-center justify-between animate-pulse">
-                      <div className="flex items-center gap-2">
-                        <Zap className="w-5 h-5" />
-                        <span className="text-sm font-bold">OFERTA EXPIRA EM</span>
+                  !showPixPayment ? (
+                    <>
+                      {/* Offer Timer */}
+                      <div className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground rounded-lg p-3 flex items-center justify-between animate-pulse">
+                        <div className="flex items-center gap-2">
+                          <Zap className="w-5 h-5" />
+                          <span className="text-sm font-bold">OFERTA EXPIRA EM</span>
+                        </div>
+                        <span className="text-lg font-black">{formatTime(offerTimeLeft)}</span>
                       </div>
-                      <span className="text-lg font-black">{formatTime(offerTimeLeft)}</span>
-                    </div>
 
-                    {/* Plan Selection */}
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium text-foreground text-center">Escolha seu plano</p>
-                      
-                      <button
-                        onClick={() => setSelectedPlan("mensal")}
-                        className={`w-full p-4 rounded-xl border-2 transition-all text-left relative ${
-                          selectedPlan === "mensal"
-                            ? "border-primary bg-primary/5"
-                            : "border-border bg-card hover:border-primary/50"
-                        }`}
-                      >
-                        <div className="absolute -top-2.5 right-3 px-2 py-0.5 bg-primary text-primary-foreground text-xs font-bold rounded animate-bounce">
-                          Mais Popular
+                      {/* Email Input */}
+                      <div className="space-y-2">
+                        <Label className="text-foreground text-sm font-medium">
+                          Seu email (para receber o link/QR Code)
+                        </Label>
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                          <Input
+                            type="email"
+                            placeholder="seu@email.com"
+                            value={customerEmail}
+                            onChange={(e) => setCustomerEmail(e.target.value)}
+                            className="pl-10 bg-card border-border text-foreground h-11"
+                          />
                         </div>
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="font-semibold text-foreground">Plano Mensal</p>
-                            <p className="text-xs text-muted-foreground">Acesso completo por 30 dias</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-xl font-bold text-primary">R$ 19,90</p>
-                            <p className="text-xs text-muted-foreground line-through">R$ 39,90</p>
-                          </div>
-                        </div>
-                      </button>
-
-                      <button
-                        onClick={() => setSelectedPlan("anual")}
-                        className={`w-full p-4 rounded-xl border-2 transition-all text-left relative ${
-                          selectedPlan === "anual"
-                            ? "border-primary bg-primary/5"
-                            : "border-border bg-card hover:border-primary/50"
-                        }`}
-                      >
-                        <div className="absolute -top-2.5 right-3 px-2 py-0.5 bg-green-500 text-white text-xs font-bold rounded">
-                          Economize 50%
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="font-semibold text-foreground">Plano Anual</p>
-                            <p className="text-xs text-muted-foreground">Melhor custo-beneficio - 12 meses</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-xl font-bold text-foreground">R$ 29,90</p>
-                            <p className="text-xs text-muted-foreground line-through">R$ 59,90</p>
-                          </div>
-                        </div>
-                      </button>
-                    </div>
-
-                    {/* Extra photos cost */}
-                    {extraPhotosCost > 0 && (
-                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Crown className="w-4 h-4 text-amber-600" />
-                            <span className="text-sm text-amber-800">Fotos extras ({extraPhotosCount})</span>
-                          </div>
-                          <span className="text-sm font-bold text-amber-800">+ R$ {extraPhotosCost.toFixed(2).replace('.', ',')}</span>
-                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Enviaremos o link da sua carta para este email
+                        </p>
                       </div>
-                    )}
 
-                    {/* Total */}
-                    <div className={`rounded-xl p-4 ${currentTheme.bg} border ${currentTheme.border}`}>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-white/80">Plano {selectedPlan}</span>
-                        <span className="text-white font-medium">R$ {selectedPlan === "mensal" ? "19,90" : "29,90"}</span>
+                      {/* Plan Selection */}
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-foreground text-center">Escolha seu plano</p>
+                        
+                        <button
+                          onClick={() => setSelectedPlan("unico")}
+                          className={`w-full p-4 rounded-xl border-2 transition-all text-left relative ${
+                            selectedPlan === "unico"
+                              ? "border-primary bg-primary/5"
+                              : "border-border bg-card hover:border-primary/50"
+                          }`}
+                        >
+                          <div className="absolute -top-2.5 right-3 px-2 py-0.5 bg-primary text-primary-foreground text-xs font-bold rounded animate-bounce">
+                            Mais Popular
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="font-semibold text-foreground">Plano Unico</p>
+                              <p className="text-xs text-muted-foreground">Pagamento unico - Acesso permanente</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xl font-bold text-primary">R$ 17,89</p>
+                              <p className="text-xs text-muted-foreground line-through">R$ 34,90</p>
+                            </div>
+                          </div>
+                        </button>
+
+                        <button
+                          onClick={() => setSelectedPlan("mensal")}
+                          className={`w-full p-4 rounded-xl border-2 transition-all text-left relative ${
+                            selectedPlan === "mensal"
+                              ? "border-primary bg-primary/5"
+                              : "border-border bg-card hover:border-primary/50"
+                          }`}
+                        >
+                          <div className="absolute -top-2.5 right-3 px-2 py-0.5 bg-green-500 text-white text-xs font-bold rounded">
+                            Premium
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="font-semibold text-foreground">Plano Mensal</p>
+                              <p className="text-xs text-muted-foreground">Acesso completo + recursos premium</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xl font-bold text-foreground">R$ 39,89</p>
+                              <p className="text-xs text-muted-foreground">/mes</p>
+                            </div>
+                          </div>
+                        </button>
                       </div>
+
+                      {/* Extra photos cost */}
                       {extraPhotosCost > 0 && (
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-white/80">Fotos extras</span>
-                          <span className="text-white font-medium">R$ {extraPhotosCost.toFixed(2).replace('.', ',')}</span>
+                        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Crown className="w-4 h-4 text-amber-400" />
+                              <span className="text-sm text-amber-300">Fotos extras ({extraPhotosCount})</span>
+                            </div>
+                            <span className="text-sm font-bold text-amber-300">+ R$ {extraPhotosCost.toFixed(2).replace('.', ',')}</span>
+                          </div>
                         </div>
                       )}
-                      <div className="border-t border-white/20 pt-2 mt-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-white font-bold">Total</span>
-                          <span className="text-white font-bold text-lg">
-                            R$ {((selectedPlan === "mensal" ? 19.90 : 29.90) + extraPhotosCost).toFixed(2).replace('.', ',')}
+
+                      {/* Total */}
+                      <div className={`rounded-xl p-4 ${currentTheme.bg} border ${currentTheme.border}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-white/80">Plano {selectedPlan === "unico" ? "Unico" : "Mensal"}</span>
+                          <span className="text-white font-medium">R$ {selectedPlan === "unico" ? "17,89" : "39,89"}</span>
+                        </div>
+                        {extraPhotosCost > 0 && (
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-white/80">Fotos extras</span>
+                            <span className="text-white font-medium">R$ {extraPhotosCost.toFixed(2).replace('.', ',')}</span>
+                          </div>
+                        )}
+                        <div className="border-t border-white/20 pt-2 mt-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-white font-bold">Total</span>
+                            <span className="text-white font-bold text-lg">
+                              R$ {getPaymentAmount().toFixed(2).replace('.', ',')}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Social Proof */}
+                      <div className="bg-secondary/50 rounded-lg p-3 flex items-center gap-3">
+                        <div className="flex -space-x-2">
+                          {[1, 2, 3, 4].map((i) => (
+                            <div key={i} className="w-6 h-6 rounded-full bg-primary/20 border-2 border-card" />
+                          ))}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-1">
+                            {[1, 2, 3, 4, 5].map((i) => (
+                              <Star key={i} className="w-3 h-3 text-amber-500 fill-amber-500" />
+                            ))}
+                          </div>
+                          <p className="text-xs text-muted-foreground">+2.847 cartas enviadas hoje</p>
+                        </div>
+                      </div>
+
+                      {/* Security Badges */}
+                      <div className="flex items-center justify-center gap-4 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          <Lock className="w-3 h-3" /> Pagamento seguro
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Check className="w-3 h-3" /> Satisfacao garantida
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    /* PIX Payment Screen */
+                    <div className="space-y-4">
+                      <div className="text-center">
+                        <div className={`w-14 h-14 rounded-full ${currentTheme.bg} mx-auto mb-3 flex items-center justify-center`}>
+                          <QrCode className={`w-7 h-7 ${currentTheme.text}`} />
+                        </div>
+                        <h3 className="text-lg font-bold text-foreground mb-1">Pague com PIX</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Escaneie o QR Code ou copie o codigo
+                        </p>
+                      </div>
+
+                      {/* QR Code */}
+                      <div className={`rounded-xl border ${currentTheme.border} ${currentTheme.bg} p-4`}>
+                        {pixQrCodeBase64 ? (
+                          <div className="w-48 h-48 mx-auto bg-white rounded-xl flex items-center justify-center p-2">
+                            <Image 
+                              src={`data:image/png;base64,${pixQrCodeBase64}`}
+                              alt="QR Code PIX"
+                              width={180}
+                              height={180}
+                            />
+                          </div>
+                        ) : (
+                          <div className="w-48 h-48 mx-auto bg-white rounded-xl flex items-center justify-center">
+                            <div className="text-center p-4">
+                              <QrCode className="w-16 h-16 mx-auto text-gray-400 mb-2" />
+                              <p className="text-xs text-gray-500">QR Code PIX</p>
+                            </div>
+                          </div>
+                        )}
+                        
+                        <div className="mt-4 text-center">
+                          <p className="text-2xl font-bold text-white">
+                            R$ {getPaymentAmount().toFixed(2).replace('.', ',')}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* PIX Copy-Paste */}
+                      <div className="space-y-2">
+                        <Label className="text-xs text-muted-foreground">Codigo PIX Copia e Cola:</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            value={pixCode}
+                            readOnly
+                            className="bg-secondary/50 text-xs font-mono"
+                          />
+                          <Button 
+                            onClick={copyPixCode} 
+                            size="icon" 
+                            variant="outline"
+                            className={copiedPix ? "bg-green-500 text-white border-green-500" : ""}
+                          >
+                            {copiedPix ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                          </Button>
+                        </div>
+                      </div>
+
+                      <Button 
+                        onClick={copyPixCode}
+                        className="w-full h-12 bg-primary text-primary-foreground"
+                      >
+                        <Copy className="w-4 h-4 mr-2" />
+                        {copiedPix ? "Codigo copiado!" : "Copiar codigo PIX"}
+                      </Button>
+
+                      {/* Payment Status */}
+                      <div className="bg-secondary/50 rounded-lg p-3 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                          <span className="text-sm text-muted-foreground">
+                            Aguardando confirmacao do pagamento...
                           </span>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Social Proof */}
-                    <div className="bg-secondary/50 rounded-lg p-3 flex items-center gap-3">
-                      <div className="flex -space-x-2">
-                        {[1, 2, 3, 4].map((i) => (
-                          <div key={i} className="w-6 h-6 rounded-full bg-primary/20 border-2 border-card" />
-                        ))}
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-1">
-                          {[1, 2, 3, 4, 5].map((i) => (
-                            <Star key={i} className="w-3 h-3 text-amber-500 fill-amber-500" />
-                          ))}
-                        </div>
-                        <p className="text-xs text-muted-foreground">+2.847 cartas enviadas hoje</p>
-                      </div>
-                    </div>
+                      {/* Demo Button (for testing) */}
+                      <button
+                        onClick={handleDemoPayment}
+                        className="w-full text-xs text-muted-foreground hover:text-primary transition-colors underline"
+                      >
+                        Simular pagamento aprovado (demo)
+                      </button>
 
-                    {/* Security Badges */}
-                    <div className="flex items-center justify-center gap-4 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Lock className="w-3 h-3" /> Pagamento seguro
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Check className="w-3 h-3" /> Satisfacao garantida
-                      </span>
+                      <button
+                        onClick={() => setShowPixPayment(false)}
+                        className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        Voltar para escolher outro plano
+                      </button>
                     </div>
-                  </>
+                  )
                 ) : (
                   /* After Payment - Show Link/QR */
                   <div className="space-y-4">
@@ -1248,6 +1526,11 @@ export default function CriarCartaPage() {
                       </div>
                       <h3 className="text-xl font-bold text-foreground mb-2">Pagamento confirmado!</h3>
                       <p className="text-sm text-muted-foreground">Sua carta esta pronta para ser enviada</p>
+                      {customerEmail && (
+                        <p className="text-xs text-primary mt-1">
+                          Link enviado para: {customerEmail}
+                        </p>
+                      )}
                     </div>
 
                     {shareMethod === "link" ? (
@@ -1261,32 +1544,36 @@ export default function CriarCartaPage() {
                               className="bg-secondary/50 text-sm"
                             />
                             <Button onClick={copyLink} size="icon" variant="outline">
-                              <Link2 className="w-4 h-4" />
+                              <Copy className="w-4 h-4" />
                             </Button>
                           </div>
                         </div>
-                        <Button 
-                          onClick={copyLink}
-                          className="w-full h-12 bg-primary text-primary-foreground"
-                        >
-                          Copiar link para compartilhar
-                        </Button>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button 
+                            onClick={copyLink}
+                            className="h-12 bg-primary text-primary-foreground"
+                          >
+                            <Copy className="w-4 h-4 mr-2" />
+                            Copiar link
+                          </Button>
+                          <Button 
+                            onClick={() => window.open(generatedLink, '_blank')}
+                            variant="outline"
+                            className="h-12"
+                          >
+                            <ExternalLink className="w-4 h-4 mr-2" />
+                            Abrir carta
+                          </Button>
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-3">
                         <div className={`rounded-xl border ${currentTheme.border} ${currentTheme.bg} p-6`}>
-                          <div className="w-48 h-48 mx-auto bg-white rounded-xl flex items-center justify-center relative">
-                            <div className="grid grid-cols-5 gap-1">
-                              {Array.from({ length: 25 }).map((_, i) => (
-                                <div
-                                  key={i}
-                                  className={`w-7 h-7 rounded-sm ${
-                                    [0, 1, 2, 3, 4, 5, 9, 10, 14, 15, 19, 20, 21, 22, 23, 24].includes(i) 
-                                      ? "bg-gray-900" 
-                                      : "bg-gray-200"
-                                  }`}
-                                />
-                              ))}
+                          <div className="w-48 h-48 mx-auto bg-white rounded-xl flex items-center justify-center relative p-2">
+                            {/* Generate QR Code for carta link */}
+                            <div className="text-center">
+                              <QrCode className="w-20 h-20 mx-auto text-gray-800 mb-2" />
+                              <p className="text-xs text-gray-600 font-medium">Escaneie para abrir</p>
                             </div>
                             {selectedQrStyle === "hearts" && (
                               <>
@@ -1299,14 +1586,25 @@ export default function CriarCartaPage() {
                           </div>
                           <p className="text-center text-sm text-white/80 mt-4">Escaneie para abrir a carta</p>
                         </div>
-                        <Button className="w-full h-12 bg-primary text-primary-foreground">
-                          Baixar QR Code
-                        </Button>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button className="h-12 bg-primary text-primary-foreground">
+                            <Download className="w-4 h-4 mr-2" />
+                            Baixar QR
+                          </Button>
+                          <Button 
+                            onClick={() => window.open(generatedLink, '_blank')}
+                            variant="outline"
+                            className="h-12"
+                          >
+                            <ExternalLink className="w-4 h-4 mr-2" />
+                            Ver carta
+                          </Button>
+                        </div>
                       </div>
                     )}
 
                     <p className="text-xs text-center text-muted-foreground">
-                      Para: {partnerName} | Valido por {selectedPlan === "mensal" ? "30 dias" : "12 meses"}
+                      Para: {partnerName} | {selectedPlan === "unico" ? "Acesso permanente" : "Assinatura mensal"}
                     </p>
                   </div>
                 )}
@@ -1315,43 +1613,48 @@ export default function CriarCartaPage() {
 
             {/* Navigation Buttons */}
             {!(currentStep === 7 && isPaid) && (
-              <div className="flex items-center gap-3 mt-6">
+              <div className="flex items-center gap-3 mt-8 pt-4 border-t border-border/50">
                 {currentStep > 1 && !isPaid && (
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     onClick={prevStep}
-                    className="flex-1 h-11 bg-transparent border-border text-foreground hover:bg-secondary"
+                    className="h-11 px-6 text-muted-foreground hover:text-foreground"
                   >
                     <ChevronLeft className="w-4 h-4 mr-1" />
                     Voltar
                   </Button>
                 )}
+
+                {/* Step counter in center */}
+                <div className="flex-1 text-center text-sm text-muted-foreground">
+                  {currentStep} de {TOTAL_STEPS}
+                </div>
                 
                 {currentStep < TOTAL_STEPS ? (
                   <Button
                     onClick={nextStep}
                     disabled={!canProceed()}
-                    className="flex-1 h-11 bg-primary text-primary-foreground hover:bg-primary/90"
+                    className="h-11 px-6 bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl shadow-lg shadow-primary/20"
                   >
-                    {currentStep === 6 ? "Ver Precos" : "Continuar"}
+                    {currentStep === 6 ? "Finalizar" : "Continuar"}
                     <ChevronRight className="w-4 h-4 ml-1" />
                   </Button>
                 ) : (
-                  !isPaid && (
+                  !isPaid && !showPixPayment && (
                     <Button
-                      onClick={handlePayment}
-                      disabled={isProcessingPayment}
-                      className="flex-1 h-12 bg-primary text-primary-foreground hover:bg-primary/90 font-bold text-base shadow-lg"
+                      onClick={handleCreatePayment}
+                      disabled={isProcessingPayment || !customerEmail}
+                      className="h-12 px-6 bg-primary text-primary-foreground hover:bg-primary/90 font-bold text-base shadow-lg shadow-primary/20 rounded-xl"
                     >
                       {isProcessingPayment ? (
                         <>
                           <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                          Processando...
+                          Gerando PIX...
                         </>
                       ) : (
                         <>
                           <Gift className="w-5 h-5 mr-2" />
-                          Pagar R$ {((selectedPlan === "mensal" ? 19.90 : 29.90) + extraPhotosCost).toFixed(2).replace('.', ',')}
+                          Pagar R$ {getPaymentAmount().toFixed(2).replace('.', ',')}
                         </>
                       )}
                     </Button>
@@ -1364,7 +1667,10 @@ export default function CriarCartaPage() {
           {/* Preview Section - Desktop */}
           <div className="hidden lg:block w-64 xl:w-72">
             <div className="sticky top-4">
-              <p className="text-xs text-muted-foreground text-center mb-2">Pre-visualizacao ao vivo</p>
+              <div className="flex items-center justify-center gap-2 mb-3">
+                <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                <p className="text-xs text-muted-foreground">Preview em tempo real</p>
+              </div>
               
               {/* Card Preview or QR Preview */}
               {(currentStep === 6 || currentStep === 7) && shareMethod === "qr" ? (
@@ -1401,9 +1707,12 @@ export default function CriarCartaPage() {
                 // Card Preview
                 <div className="relative w-full max-w-[180px] mx-auto">
                   {/* Mini Phone Frame */}
-                  <div className="relative w-full aspect-[9/18] bg-gray-900 rounded-2xl p-1 shadow-lg">
+                  <div className="relative w-full aspect-[9/18] bg-black rounded-2xl p-1 shadow-lg animate-glow-pulse">
                     {/* Phone Notch */}
-                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-12 h-3 bg-gray-900 rounded-b-lg z-20" />
+                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-12 h-3 bg-black rounded-b-lg z-20 flex items-center justify-center gap-1">
+                      <div className="w-1 h-1 rounded-full bg-gray-700" />
+                      <div className="w-1 h-1 rounded-full bg-gray-700" />
+                    </div>
                     
                     {/* Phone Screen */}
                     <div className={`w-full h-full rounded-xl overflow-hidden bg-gradient-to-b ${currentTheme.gradient} relative`}>
@@ -1544,12 +1853,12 @@ export default function CriarCartaPage() {
       </main>
 
       {/* Mobile Preview Button */}
-      <div className="lg:hidden fixed bottom-4 right-4">
+      <div className="lg:hidden fixed bottom-4 right-4 z-40">
         <Button
           onClick={() => setShowMobilePreview(true)}
-          className="rounded-full w-12 h-12 bg-primary text-primary-foreground shadow-lg"
+          className="rounded-full w-14 h-14 bg-primary text-primary-foreground shadow-lg shadow-primary/30 animate-glow-pulse"
         >
-          <Heart className="w-5 h-5" />
+          <Heart className="w-5 h-5 fill-current" />
         </Button>
       </div>
 
