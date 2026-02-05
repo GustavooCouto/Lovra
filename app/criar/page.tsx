@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import Link from "next/link"
+import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -28,12 +29,14 @@ import {
   Loader2,
   QrCode,
   Link2,
-  Copy,
   Calendar,
   Edit3,
   Gift,
   Zap,
   Flower2,
+  Mail,
+  Plus,
+  Crown,
 } from "lucide-react"
 
 const mainRelationshipTypes = [
@@ -106,7 +109,12 @@ const qrCodeStyles = [
   { id: "gradient", label: "Colorido", description: "Gradiente" },
 ]
 
-const TOTAL_STEPS = 5
+const TOTAL_STEPS = 7
+const FREE_PHOTO_LIMIT = 5
+const EXTRA_PHOTOS_PRICE = 4.90
+const DECORATION_PRICE = 1.00
+const THEME_CHANGE_PRICE = 1.00
+const DEFAULT_THEME = "red"
 
 export default function CriarCartaPage() {
   const [currentStep, setCurrentStep] = useState(1)
@@ -115,20 +123,33 @@ export default function CriarCartaPage() {
   const [partnerName, setPartnerName] = useState("")
   const [senderName, setSenderName] = useState("")
   const [message, setMessage] = useState("")
-  const [selectedTheme, setSelectedTheme] = useState("red")
-  const [photos, setPhotos] = useState<string[]>([])
+  const [selectedTheme, setSelectedTheme] = useState(DEFAULT_THEME)
+  const [hasChangedTheme, setHasChangedTheme] = useState(false)
+  const [photos, setPhotos] = useState<{ url: string; file?: File }[]>([])
   const [musicUrl, setMusicUrl] = useState("")
   const [isGeneratingAI, setIsGeneratingAI] = useState(false)
   const [showMobilePreview, setShowMobilePreview] = useState(false)
-  const [selectedDecorations, setSelectedDecorations] = useState<string[]>(["hearts"])
+  const [selectedDecorations, setSelectedDecorations] = useState<string[]>([])
   const [selectedQrStyle, setSelectedQrStyle] = useState("simple")
   const [shareMethod, setShareMethod] = useState<"qr" | "link">("link")
   const [selectedPlan, setSelectedPlan] = useState<"mensal" | "anual">("mensal")
   const [countdownEnabled, setCountdownEnabled] = useState(false)
   const [togetherDate, setTogetherDate] = useState("")
-  const [offerTimeLeft, setOfferTimeLeft] = useState(3600)
+  const [offerTimeLeft, setOfferTimeLeft] = useState(300) // 5 minutos
   const [showTransition, setShowTransition] = useState(false)
   const [showSuggestionsModal, setShowSuggestionsModal] = useState(false)
+  const [timelineMode, setTimelineMode] = useState(false)
+  const [wantsExtraPhotos, setWantsExtraPhotos] = useState(false)
+  const [isPaid, setIsPaid] = useState(false)
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false)
+  const [generatedLink, setGeneratedLink] = useState("")
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  
+  const extraPhotosCount = Math.max(0, photos.length - FREE_PHOTO_LIMIT)
+  const extraPhotosCost = extraPhotosCount > 0 ? EXTRA_PHOTOS_PRICE : 0
+  const decorationsCost = selectedDecorations.length * DECORATION_PRICE
+  const themeCost = hasChangedTheme && selectedTheme !== DEFAULT_THEME ? THEME_CHANGE_PRICE : 0
+  const totalExtrasCost = extraPhotosCost + decorationsCost + themeCost
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -165,6 +186,10 @@ export default function CriarCartaPage() {
         return true
       case 5:
         return true
+      case 6:
+        return true
+      case 7:
+        return true
       default:
         return false
     }
@@ -172,16 +197,52 @@ export default function CriarCartaPage() {
 
   const nextStep = () => {
     if (currentStep < TOTAL_STEPS && canProceed()) {
-      if (currentStep === 4) {
+      if (currentStep === 6) {
         setShowTransition(true)
         setTimeout(() => {
           setShowTransition(false)
-          setCurrentStep(5)
-        }, 3000)
+          setCurrentStep(7)
+        }, 4000)
       } else {
         setCurrentStep(currentStep + 1)
       }
     }
+  }
+
+  const handlePayment = async () => {
+    setIsProcessingPayment(true)
+    // Simular processamento de pagamento
+    await new Promise(resolve => setTimeout(resolve, 2500))
+    
+    // Gerar ID unico para a carta
+    const uniqueId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36)
+    
+    // Salvar dados da carta no localStorage para demo
+    const cartaData = {
+      id: uniqueId,
+      partnerName,
+      senderName,
+      message,
+      selectedTheme,
+      selectedDecorations,
+      photos: photos.map(p => p.url),
+      timelineMode,
+      musicUrl,
+      countdownEnabled,
+      togetherDate,
+      selectedRelationship,
+      createdAt: new Date().toISOString()
+    }
+    localStorage.setItem(`carta_${uniqueId}`, JSON.stringify(cartaData))
+    
+    const baseUrl = typeof window !== 'undefined' ? window.location.origin : ''
+    setGeneratedLink(`${baseUrl}/carta/${uniqueId}`)
+    setIsPaid(true)
+    setIsProcessingPayment(false)
+  }
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(generatedLink)
   }
 
   const prevStep = () => {
@@ -207,15 +268,55 @@ export default function CriarCartaPage() {
       case 4:
         return "Personalize sua carta"
       case 5:
-        return "Ultimo passo!"
+        return "Toques finais"
+      case 6:
+        return "Como quer compartilhar?"
+      case 7:
+        return isPaid ? "Sua carta esta pronta!" : "Finalize sua carta!"
       default:
         return ""
     }
   }
 
-  const handlePhotoUpload = () => {
-    const newPhoto = `photo-${Date.now()}`
-    setPhotos([...photos, newPhoto])
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files) return
+    
+    const maxPhotos = wantsExtraPhotos ? 10 : FREE_PHOTO_LIMIT
+    const remainingSlots = maxPhotos - photos.length
+    
+    if (remainingSlots <= 0) return
+    
+    const filesToProcess = Array.from(files).slice(0, remainingSlots)
+    
+    filesToProcess.forEach(file => {
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        const url = event.target?.result as string
+        setPhotos(prev => [...prev, { url, file }])
+      }
+      reader.readAsDataURL(file)
+    })
+    
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+  
+  const removePhoto = (index: number) => {
+    setPhotos(photos.filter((_, i) => i !== index))
+  }
+
+  const handleThemeChange = (themeId: string) => {
+    if (themeId !== DEFAULT_THEME) {
+      setHasChangedTheme(true)
+    }
+    setSelectedTheme(themeId)
+  }
+
+  const removeDecoration = (decorationId: string) => {
+    setSelectedDecorations(selectedDecorations.filter(d => d !== decorationId))
   }
 
   const generateAIMessage = () => {
@@ -243,46 +344,86 @@ export default function CriarCartaPage() {
 
   const currentTheme = themeColors[selectedTheme] || themeColors.red
 
-  // Transition Animation Screen
+  // Transition Animation Screen - Envelope Animation
   if (showTransition) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
-        <div className="text-center animate-in fade-in zoom-in duration-500">
-          <div className="relative mb-8">
-            <div className={`w-32 h-32 mx-auto rounded-3xl bg-gradient-to-br ${currentTheme.gradient} border-2 ${currentTheme.border} flex items-center justify-center animate-pulse`}>
-              <Gift className={`w-16 h-16 ${currentTheme.text}`} />
+      <div className="min-h-screen bg-gradient-to-b from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4 overflow-hidden">
+        {/* Floating decorations all around */}
+        <div className="absolute inset-0 pointer-events-none">
+          {selectedDecorations.includes("hearts") && (
+            <>
+              <Heart className={`absolute top-[10%] left-[10%] w-6 h-6 ${currentTheme.text} fill-current animate-float-slow opacity-60`} />
+              <Heart className={`absolute top-[20%] right-[15%] w-4 h-4 ${currentTheme.text} fill-current animate-float-medium opacity-40`} />
+              <Heart className={`absolute top-[40%] left-[5%] w-5 h-5 ${currentTheme.text} fill-current animate-float-fast opacity-50`} />
+              <Heart className={`absolute bottom-[30%] right-[8%] w-7 h-7 ${currentTheme.text} fill-current animate-float-slow opacity-70`} />
+              <Heart className={`absolute bottom-[15%] left-[20%] w-3 h-3 ${currentTheme.text} fill-current animate-float-medium opacity-30`} />
+              <Heart className={`absolute top-[60%] right-[25%] w-4 h-4 ${currentTheme.text} fill-current animate-float-fast opacity-45`} />
+            </>
+          )}
+          {selectedDecorations.includes("stars") && (
+            <>
+              <Star className={`absolute top-[15%] right-[20%] w-5 h-5 ${currentTheme.text} fill-current animate-twinkle opacity-60`} />
+              <Star className={`absolute top-[35%] left-[15%] w-4 h-4 ${currentTheme.text} fill-current animate-twinkle-delayed opacity-50`} />
+              <Star className={`absolute bottom-[25%] right-[12%] w-6 h-6 ${currentTheme.text} fill-current animate-twinkle opacity-70`} />
+              <Star className={`absolute bottom-[40%] left-[8%] w-3 h-3 ${currentTheme.text} fill-current animate-twinkle-delayed opacity-40`} />
+            </>
+          )}
+          {selectedDecorations.includes("sparkles") && (
+            <>
+              <Sparkles className={`absolute top-[25%] left-[25%] w-5 h-5 ${currentTheme.text} animate-sparkle opacity-60`} />
+              <Sparkles className={`absolute top-[50%] right-[10%] w-4 h-4 ${currentTheme.text} animate-sparkle-delayed opacity-50`} />
+              <Sparkles className={`absolute bottom-[20%] left-[12%] w-6 h-6 ${currentTheme.text} animate-sparkle opacity-70`} />
+              <Sparkles className={`absolute bottom-[35%] right-[22%] w-3 h-3 ${currentTheme.text} animate-sparkle-delayed opacity-40`} />
+            </>
+          )}
+          {selectedDecorations.includes("flowers") && (
+            <>
+              <Flower2 className={`absolute top-[18%] left-[18%] w-5 h-5 ${currentTheme.text} animate-sway opacity-60`} />
+              <Flower2 className={`absolute top-[45%] right-[18%] w-4 h-4 ${currentTheme.text} animate-sway-delayed opacity-50`} />
+              <Flower2 className={`absolute bottom-[28%] left-[22%] w-6 h-6 ${currentTheme.text} animate-sway opacity-70`} />
+            </>
+          )}
+        </div>
+
+        <div className="text-center animate-in fade-in zoom-in duration-700 relative z-10">
+          {/* Envelope Animation */}
+          <div className="relative mb-8 mx-auto w-48 h-36 perspective-1000">
+            {/* Envelope body */}
+            <div className={`absolute inset-0 rounded-lg bg-gradient-to-br ${currentTheme.gradient} border-2 ${currentTheme.border} shadow-2xl`}>
+              {/* Envelope flap - animates closing */}
+              <div 
+                className={`absolute -top-1 left-0 right-0 h-20 origin-top bg-gradient-to-b ${currentTheme.gradient} border-2 ${currentTheme.border} rounded-t-lg animate-envelope-close`}
+                style={{ clipPath: 'polygon(0 0, 50% 100%, 100% 0)' }}
+              />
+              
+              {/* Letter inside */}
+              <div className="absolute inset-4 top-8 bg-white/90 rounded shadow-inner flex items-center justify-center animate-letter-slide">
+                <div className="text-center p-2">
+                  <Heart className={`w-6 h-6 mx-auto mb-1 ${currentTheme.text.replace('text-', 'text-')} fill-current`} />
+                  <p className="text-[8px] text-gray-600 font-medium">Para {partnerName}</p>
+                </div>
+              </div>
             </div>
-            {selectedDecorations.includes("hearts") && (
-              <>
-                <Heart className={`absolute -top-4 -left-4 w-6 h-6 ${currentTheme.text} fill-current animate-bounce`} style={{ animationDelay: "0s" }} />
-                <Heart className={`absolute -top-2 -right-6 w-4 h-4 ${currentTheme.text} fill-current animate-bounce`} style={{ animationDelay: "0.3s" }} />
-                <Heart className={`absolute -bottom-3 -left-6 w-5 h-5 ${currentTheme.text} fill-current animate-bounce`} style={{ animationDelay: "0.6s" }} />
-              </>
-            )}
-            {selectedDecorations.includes("stars") && (
-              <>
-                <Star className={`absolute top-0 right-0 w-5 h-5 ${currentTheme.text} fill-current animate-pulse`} style={{ animationDelay: "0.2s" }} />
-                <Star className={`absolute bottom-4 -right-4 w-4 h-4 ${currentTheme.text} fill-current animate-pulse`} style={{ animationDelay: "0.5s" }} />
-              </>
-            )}
-            {selectedDecorations.includes("sparkles") && (
-              <>
-                <Sparkles className={`absolute -top-6 left-1/2 w-5 h-5 ${currentTheme.text} animate-pulse`} style={{ animationDelay: "0.1s" }} />
-                <Sparkles className={`absolute bottom-0 -left-8 w-4 h-4 ${currentTheme.text} animate-pulse`} style={{ animationDelay: "0.4s" }} />
-              </>
-            )}
+            
+            {/* Floating hearts around envelope */}
+            <Heart className={`absolute -top-6 -left-6 w-5 h-5 ${currentTheme.text} fill-current animate-heart-float-1`} />
+            <Heart className={`absolute -top-4 -right-8 w-4 h-4 ${currentTheme.text} fill-current animate-heart-float-2`} />
+            <Heart className={`absolute -bottom-4 -left-8 w-6 h-6 ${currentTheme.text} fill-current animate-heart-float-3`} />
+            <Heart className={`absolute -bottom-6 -right-6 w-3 h-3 ${currentTheme.text} fill-current animate-heart-float-4`} />
+            <Heart className={`absolute top-1/2 -left-10 w-4 h-4 ${currentTheme.text} fill-current animate-heart-float-5`} />
+            <Heart className={`absolute top-1/2 -right-10 w-5 h-5 ${currentTheme.text} fill-current animate-heart-float-6`} />
           </div>
           
-          <h2 className="text-2xl md:text-3xl font-bold text-white mb-2">Sua carta esta ficando linda!</h2>
+          <h2 className="text-2xl md:text-3xl font-bold text-white mb-2 animate-pulse">Sua carta esta quase pronta!</h2>
           <p className={`${currentTheme.text} text-lg mb-4`}>Para: {partnerName}</p>
           
-          <div className={`max-w-sm mx-auto p-4 rounded-xl ${currentTheme.bg} border ${currentTheme.border} mb-6`}>
-            <p className="text-white/80 text-sm italic line-clamp-3">"{message.substring(0, 100)}..."</p>
+          <div className={`max-w-sm mx-auto p-4 rounded-xl ${currentTheme.bg} border ${currentTheme.border} mb-6 animate-in slide-in-from-bottom-4 duration-1000`}>
+            <p className="text-white/80 text-sm italic line-clamp-3">&ldquo;{message.substring(0, 100)}...&rdquo;</p>
           </div>
           
-          <div className="flex items-center justify-center gap-2 text-white/60">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-sm">Preparando o ultimo passo...</span>
+          <div className="flex items-center justify-center gap-3 text-white/60">
+            <Mail className={`w-5 h-5 ${currentTheme.text} animate-bounce`} />
+            <span className="text-sm animate-pulse">Selando sua carta com amor...</span>
           </div>
         </div>
       </div>
@@ -542,32 +683,158 @@ export default function CriarCartaPage() {
             {/* Step 3: Photos */}
             {currentStep === 3 && (
               <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                {/* Photo limit info */}
+                <div className={`rounded-lg p-3 ${photos.length >= FREE_PHOTO_LIMIT && !wantsExtraPhotos ? 'bg-amber-50 border border-amber-200' : 'bg-secondary/50'}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ImagePlus className="w-4 h-4 text-primary" />
+                      <span className="text-sm font-medium text-foreground">
+                        {photos.length}/{wantsExtraPhotos ? 10 : FREE_PHOTO_LIMIT} fotos
+                      </span>
+                    </div>
+                    {photos.length >= FREE_PHOTO_LIMIT && !wantsExtraPhotos && (
+                      <span className="text-xs text-amber-600 font-medium">Limite gratuito atingido</span>
+                    )}
+                  </div>
+                  
+                  {photos.length >= FREE_PHOTO_LIMIT && !wantsExtraPhotos && (
+                    <button
+                      onClick={() => setWantsExtraPhotos(true)}
+                      className="mt-2 w-full flex items-center justify-center gap-2 py-2 px-3 bg-primary/10 hover:bg-primary/20 rounded-lg text-primary text-sm font-medium transition-colors"
+                    >
+                      <Crown className="w-4 h-4" />
+                      Desbloquear +5 fotos por R$ {EXTRA_PHOTOS_PRICE.toFixed(2).replace('.', ',')}
+                    </button>
+                  )}
+                  
+                  {wantsExtraPhotos && (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-primary">
+                      <Check className="w-3 h-3" />
+                      <span>+5 fotos extras desbloqueadas (+R$ {EXTRA_PHOTOS_PRICE.toFixed(2).replace('.', ',')})</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Hidden file input */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={handlePhotoUpload}
+                />
+                
+                {/* Upload area */}
                 <div 
-                  className="border-2 border-dashed border-border rounded-xl p-5 text-center hover:border-primary/50 cursor-pointer transition-colors"
-                  onClick={handlePhotoUpload}
+                  className={`border-2 border-dashed rounded-xl p-5 text-center transition-colors cursor-pointer ${
+                    (photos.length >= FREE_PHOTO_LIMIT && !wantsExtraPhotos) || (wantsExtraPhotos && photos.length >= 10)
+                      ? 'border-muted opacity-50 cursor-not-allowed'
+                      : 'border-border hover:border-primary/50'
+                  }`}
+                  onClick={() => {
+                    if ((photos.length < FREE_PHOTO_LIMIT) || (wantsExtraPhotos && photos.length < 10)) {
+                      fileInputRef.current?.click()
+                    }
+                  }}
                 >
                   <ImagePlus className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
                   <p className="text-foreground font-medium mb-1 text-sm">
-                    Toque para adicionar fotos
+                    Toque para adicionar fotos da galeria
                   </p>
                   <p className="text-xs text-muted-foreground">
                     PNG, JPG ate 10MB (opcional)
                   </p>
                 </div>
 
+                {/* Photos grid or timeline */}
                 {photos.length > 0 && (
-                  <div className="grid grid-cols-4 gap-2">
-                    {photos.map((_, index) => (
-                      <div key={index} className="aspect-square bg-secondary rounded-lg flex items-center justify-center relative">
-                        <Heart className="w-5 h-5 text-primary/30" />
-                        <button
-                          onClick={() => setPhotos(photos.filter((_, i) => i !== index))}
-                          className="absolute -top-1 -right-1 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
+                  <div className="space-y-3">
+                    {/* Timeline toggle */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-foreground">Modo Timeline</span>
+                      <button
+                        onClick={() => setTimelineMode(!timelineMode)}
+                        className={`w-10 h-5 rounded-full transition-colors ${timelineMode ? "bg-primary" : "bg-muted-foreground/30"}`}
+                      >
+                        <div className={`w-4 h-4 rounded-full bg-card transition-transform mx-0.5 ${timelineMode ? "translate-x-5" : ""}`} />
+                      </button>
+                    </div>
+                    
+                    {timelineMode ? (
+                      // Timeline view
+                      <div className="relative pl-6">
+                        <div className={`absolute left-2 top-0 bottom-0 w-0.5 bg-gradient-to-b ${currentTheme.gradient}`} />
+                        {photos.map((photo, index) => (
+                          <div key={index} className="relative mb-4 last:mb-0">
+                            <div className={`absolute -left-4 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full ${
+                              selectedTheme === 'red' ? 'bg-red-500' :
+                              selectedTheme === 'pink' ? 'bg-pink-500' :
+                              selectedTheme === 'purple' ? 'bg-purple-500' :
+                              selectedTheme === 'blue' ? 'bg-blue-400' :
+                              'bg-amber-500'
+                            } border-2 border-background`} />
+                            <div className="flex items-center gap-3 bg-secondary/50 rounded-lg p-2">
+                              <div className="w-16 h-16 rounded-lg overflow-hidden bg-secondary flex-shrink-0 relative">
+                                <Image
+                                  src={photo.url}
+                                  alt={`Foto ${index + 1}`}
+                                  fill
+                                  className="object-cover"
+                                />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-foreground">Momento {index + 1}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {index >= FREE_PHOTO_LIMIT ? '(Foto extra)' : 'Gratis'}
+                                </p>
+                              </div>
+                              <button
+                                onClick={() => removePhoto(index)}
+                                className="w-7 h-7 bg-destructive/10 hover:bg-destructive/20 text-destructive rounded-full flex items-center justify-center transition-colors"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    ) : (
+                      // Grid view
+                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                        {photos.map((photo, index) => (
+                          <div key={index} className="aspect-square rounded-lg overflow-hidden relative group">
+                            <Image
+                              src={photo.url}
+                              alt={`Foto ${index + 1}`}
+                              fill
+                              className="object-cover"
+                            />
+                            {index >= FREE_PHOTO_LIMIT && (
+                              <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-primary/90 rounded text-[8px] text-primary-foreground font-medium">
+                                Extra
+                              </div>
+                            )}
+                            <button
+                              onClick={() => removePhoto(index)}
+                              className="absolute top-1 right-1 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                        
+                        {/* Add more button */}
+                        {((photos.length < FREE_PHOTO_LIMIT) || (wantsExtraPhotos && photos.length < 10)) && (
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="aspect-square rounded-lg border-2 border-dashed border-border hover:border-primary/50 flex items-center justify-center transition-colors"
+                          >
+                            <Plus className="w-6 h-6 text-muted-foreground" />
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -602,9 +869,9 @@ export default function CriarCartaPage() {
 
                 <div>
                   <Label className="text-foreground text-sm font-medium mb-2 block">
-                    Enfeites
+                    Enfeites animados
                   </Label>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2 mb-3">
                     {decorationOptions.map((decoration) => {
                       const IconComponent = decoration.icon
                       const isSelected = selectedDecorations.includes(decoration.id)
@@ -618,12 +885,53 @@ export default function CriarCartaPage() {
                               : "border-border bg-card text-muted-foreground hover:border-primary/50"
                           }`}
                         >
-                          <IconComponent className="w-3 h-3" />
+                          <IconComponent className={`w-3 h-3 ${isSelected ? 'animate-bounce' : ''}`} />
                           {decoration.label}
                         </button>
                       )
                     })}
                   </div>
+                  
+                  {/* Decorations preview */}
+                  {selectedDecorations.length > 0 && (
+                    <div className={`relative h-24 rounded-xl ${currentTheme.bg} border ${currentTheme.border} overflow-hidden`}>
+                      <p className="absolute top-2 left-3 text-xs text-white/60">Preview dos enfeites:</p>
+                      
+                      {selectedDecorations.includes("hearts") && (
+                        <>
+                          <Heart className={`absolute top-4 left-[15%] w-4 h-4 ${currentTheme.text} fill-current animate-float-slow`} />
+                          <Heart className={`absolute top-8 left-[35%] w-3 h-3 ${currentTheme.text} fill-current animate-float-medium`} />
+                          <Heart className={`absolute bottom-4 left-[25%] w-5 h-5 ${currentTheme.text} fill-current animate-float-fast`} />
+                          <Heart className={`absolute top-6 right-[20%] w-3.5 h-3.5 ${currentTheme.text} fill-current animate-float-slow`} style={{ animationDelay: '0.5s' }} />
+                          <Heart className={`absolute bottom-6 right-[30%] w-4 h-4 ${currentTheme.text} fill-current animate-float-medium`} style={{ animationDelay: '0.3s' }} />
+                        </>
+                      )}
+                      
+                      {selectedDecorations.includes("stars") && (
+                        <>
+                          <Star className={`absolute top-5 left-[45%] w-4 h-4 ${currentTheme.text} fill-current animate-twinkle`} />
+                          <Star className={`absolute bottom-5 left-[55%] w-3 h-3 ${currentTheme.text} fill-current animate-twinkle-delayed`} />
+                          <Star className={`absolute top-8 right-[15%] w-3.5 h-3.5 ${currentTheme.text} fill-current animate-twinkle`} style={{ animationDelay: '0.7s' }} />
+                        </>
+                      )}
+                      
+                      {selectedDecorations.includes("sparkles") && (
+                        <>
+                          <Sparkles className={`absolute top-6 left-[60%] w-4 h-4 ${currentTheme.text} animate-sparkle`} />
+                          <Sparkles className={`absolute bottom-4 left-[70%] w-3 h-3 ${currentTheme.text} animate-sparkle-delayed`} />
+                          <Sparkles className={`absolute top-10 right-[25%] w-3.5 h-3.5 ${currentTheme.text} animate-sparkle`} style={{ animationDelay: '0.4s' }} />
+                        </>
+                      )}
+                      
+                      {selectedDecorations.includes("flowers") && (
+                        <>
+                          <Flower2 className={`absolute top-5 left-[75%] w-4 h-4 ${currentTheme.text} animate-sway`} />
+                          <Flower2 className={`absolute bottom-6 left-[10%] w-5 h-5 ${currentTheme.text} animate-sway-delayed`} />
+                          <Flower2 className={`absolute top-10 left-[50%] w-3 h-3 ${currentTheme.text} animate-sway`} style={{ animationDelay: '0.6s' }} />
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -645,111 +953,147 @@ export default function CriarCartaPage() {
               </div>
             )}
 
-            {/* Step 5: Payment & Sharing */}
+            {/* Step 5: Final Touches */}
             {currentStep === 5 && (
               <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
-                {/* Offer Timer */}
-                <div className="bg-primary text-primary-foreground rounded-lg p-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Zap className="w-4 h-4" />
-                    <span className="text-sm font-medium">Oferta Limitada</span>
+                <p className="text-sm text-muted-foreground text-center">Revise sua carta antes de continuar</p>
+                
+                {/* Summary of choices */}
+                <div className={`rounded-xl p-4 ${currentTheme.bg} border ${currentTheme.border}`}>
+                  <p className="text-sm font-medium text-white mb-3">Resumo da sua carta</p>
+                  <div className="space-y-2 text-xs text-white/80">
+                    <div className="flex justify-between">
+                      <span>Para:</span>
+                      <span className="font-medium text-white">{partnerName}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>De:</span>
+                      <span className="font-medium text-white">{senderName || "Anonimo"}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Tema:</span>
+                      <span className="font-medium text-white capitalize">{selectedTheme}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Fotos:</span>
+                      <span className="font-medium text-white">{photos.length} foto{photos.length !== 1 ? 's' : ''} {timelineMode && photos.length > 0 ? '(Timeline)' : ''}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Enfeites:</span>
+                      <span className="font-medium text-white">{selectedDecorations.length} selecionado{selectedDecorations.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    {countdownEnabled && togetherDate && (
+                      <div className="flex justify-between">
+                        <span>Contador:</span>
+                        <span className="font-medium text-white">Ativado ({daysTogether} dias)</span>
+                      </div>
+                    )}
+                    {musicUrl && (
+                      <div className="flex justify-between">
+                        <span>Musica:</span>
+                        <span className="font-medium text-white">Adicionada</span>
+                      </div>
+                    )}
                   </div>
-                  <span className="text-sm font-bold">Termina em {formatTime(offerTimeLeft)}</span>
                 </div>
 
-                {/* Plan Selection */}
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground text-center">Escolha seu plano</p>
-                  
-                  {/* Mensal - Popular */}
-                  <button
-                    onClick={() => setSelectedPlan("mensal")}
-                    className={`w-full p-3 rounded-xl border-2 transition-all text-left relative ${
-                      selectedPlan === "mensal"
-                        ? "border-primary bg-primary/5"
-                        : "border-border bg-card hover:border-primary/50"
-                    }`}
-                  >
-                    <div className="absolute -top-2 right-3 px-2 py-0.5 bg-primary text-primary-foreground text-xs font-medium rounded">
-                      Mais Popular
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold text-foreground">Mensal</p>
-                        <p className="text-xs text-muted-foreground">Acesso por 30 dias</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-primary">R$ 19,90</p>
-                        <p className="text-xs text-muted-foreground line-through">R$ 39,90</p>
-                      </div>
-                    </div>
-                  </button>
+                {/* Message preview */}
+                <div className="rounded-xl border border-border bg-card p-4">
+                  <p className="text-xs text-muted-foreground mb-2">Sua mensagem:</p>
+                  <p className="text-sm text-foreground italic line-clamp-4">&ldquo;{message}&rdquo;</p>
+                </div>
 
-                  {/* Anual */}
+                {/* Edit Buttons */}
+                <div className="grid grid-cols-2 gap-2">
                   <button
-                    onClick={() => setSelectedPlan("anual")}
-                    className={`w-full p-3 rounded-xl border-2 transition-all text-left ${
-                      selectedPlan === "anual"
-                        ? "border-primary bg-primary/5"
-                        : "border-border bg-card hover:border-primary/50"
-                    }`}
+                    onClick={() => goToStep(1)}
+                    className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border border-border text-sm text-muted-foreground hover:text-primary hover:border-primary/50 transition-colors"
                   >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold text-foreground">Anual</p>
-                        <p className="text-xs text-muted-foreground">Melhor valor - 12 meses</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-foreground">R$ 29,90</p>
-                        <p className="text-xs text-muted-foreground line-through">R$ 59,90</p>
-                      </div>
-                    </div>
+                    <User className="w-4 h-4" />
+                    Editar destinatario
+                  </button>
+                  <button
+                    onClick={() => goToStep(2)}
+                    className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border border-border text-sm text-muted-foreground hover:text-primary hover:border-primary/50 transition-colors"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                    Editar mensagem
+                  </button>
+                  <button
+                    onClick={() => goToStep(3)}
+                    className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border border-border text-sm text-muted-foreground hover:text-primary hover:border-primary/50 transition-colors"
+                  >
+                    <ImagePlus className="w-4 h-4" />
+                    Editar fotos
+                  </button>
+                  <button
+                    onClick={() => goToStep(4)}
+                    className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border border-border text-sm text-muted-foreground hover:text-primary hover:border-primary/50 transition-colors"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Editar tema
                   </button>
                 </div>
 
+                <p className="text-xs text-center text-muted-foreground">
+                  Tudo certo? Avance para escolher como compartilhar!
+                </p>
+              </div>
+            )}
+
+            {/* Step 6: Sharing Options */}
+            {currentStep === 6 && (
+              <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                 {/* Sharing Options */}
                 <div>
-                  <p className="text-sm font-medium text-foreground mb-2">Como quer compartilhar?</p>
-                  <div className="grid grid-cols-2 gap-2">
+                  <p className="text-sm font-medium text-foreground mb-3">Como quer compartilhar sua carta?</p>
+                  <div className="grid grid-cols-2 gap-3">
                     <button
                       onClick={() => setShareMethod("link")}
-                      className={`p-3 rounded-xl border-2 transition-all flex flex-col items-center gap-1 ${
+                      className={`p-4 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${
                         shareMethod === "link"
                           ? "border-primary bg-primary/5"
                           : "border-border bg-card hover:border-primary/50"
                       }`}
                     >
-                      <Link2 className="w-5 h-5 text-primary" />
-                      <span className="text-xs font-medium text-foreground">Link</span>
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${shareMethod === "link" ? currentTheme.bg : "bg-secondary"}`}>
+                        <Link2 className={`w-6 h-6 ${shareMethod === "link" ? currentTheme.text : "text-muted-foreground"}`} />
+                      </div>
+                      <span className="text-sm font-medium text-foreground">Link Compartilhavel</span>
+                      <span className="text-xs text-muted-foreground text-center">Envie por WhatsApp, Instagram...</span>
                     </button>
                     <button
                       onClick={() => setShareMethod("qr")}
-                      className={`p-3 rounded-xl border-2 transition-all flex flex-col items-center gap-1 ${
+                      className={`p-4 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${
                         shareMethod === "qr"
                           ? "border-primary bg-primary/5"
                           : "border-border bg-card hover:border-primary/50"
                       }`}
                     >
-                      <QrCode className="w-5 h-5 text-primary" />
-                      <span className="text-xs font-medium text-foreground">QR Code</span>
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${shareMethod === "qr" ? currentTheme.bg : "bg-secondary"}`}>
+                        <QrCode className={`w-6 h-6 ${shareMethod === "qr" ? currentTheme.text : "text-muted-foreground"}`} />
+                      </div>
+                      <span className="text-sm font-medium text-foreground">QR Code</span>
+                      <span className="text-xs text-muted-foreground text-center">Imprima ou mostre na tela</span>
                     </button>
                   </div>
 
                   {shareMethod === "qr" && (
-                    <div className="mt-2 animate-in fade-in duration-200">
-                      <p className="text-xs text-muted-foreground mb-1.5">Estilo do QR Code:</p>
+                    <div className="mt-4 animate-in fade-in duration-200">
+                      <p className="text-xs text-muted-foreground mb-2">Escolha o estilo do QR Code:</p>
                       <div className="flex gap-2">
                         {qrCodeStyles.map((style) => (
                           <button
                             key={style.id}
                             onClick={() => setSelectedQrStyle(style.id)}
-                            className={`flex-1 p-2 rounded-lg border text-center transition-all ${
+                            className={`flex-1 p-3 rounded-lg border text-center transition-all ${
                               selectedQrStyle === style.id
                                 ? "border-primary bg-primary/5 text-primary"
                                 : "border-border bg-card text-muted-foreground hover:border-primary/50"
                             }`}
                           >
                             <span className="text-xs font-medium">{style.label}</span>
+                            <span className="text-[10px] text-muted-foreground block">{style.description}</span>
                           </button>
                         ))}
                       </div>
@@ -759,73 +1103,262 @@ export default function CriarCartaPage() {
 
                 {/* Edit Button */}
                 <button
-                  onClick={() => goToStep(1)}
+                  onClick={() => goToStep(5)}
                   className="w-full flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground hover:text-primary transition-colors"
                 >
                   <Edit3 className="w-4 h-4" />
-                  Editar minha carta
+                  Voltar para revisar
                 </button>
+              </div>
+            )}
 
-                {/* Social Proof */}
-                <div className="bg-secondary/50 rounded-lg p-3 flex items-center gap-3">
-                  <div className="flex -space-x-2">
-                    {[1, 2, 3, 4].map((i) => (
-                      <div key={i} className="w-6 h-6 rounded-full bg-primary/20 border-2 border-card" />
-                    ))}
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-1">
-                      {[1, 2, 3, 4, 5].map((i) => (
-                        <Star key={i} className="w-3 h-3 text-amber-500 fill-amber-500" />
-                      ))}
+            {/* Step 7: Payment */}
+            {currentStep === 7 && (
+              <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                {!isPaid ? (
+                  <>
+                    {/* Offer Timer */}
+                    <div className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground rounded-lg p-3 flex items-center justify-between animate-pulse">
+                      <div className="flex items-center gap-2">
+                        <Zap className="w-5 h-5" />
+                        <span className="text-sm font-bold">OFERTA EXPIRA EM</span>
+                      </div>
+                      <span className="text-lg font-black">{formatTime(offerTimeLeft)}</span>
                     </div>
-                    <p className="text-xs text-muted-foreground">+2.847 cartas enviadas hoje</p>
-                  </div>
-                </div>
 
-                {/* Security Badges */}
-                <div className="flex items-center justify-center gap-4 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    <Lock className="w-3 h-3" /> Pagamento seguro
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Check className="w-3 h-3" /> Satisfacao garantida
-                  </span>
-                </div>
+                    {/* Plan Selection */}
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-foreground text-center">Escolha seu plano</p>
+                      
+                      <button
+                        onClick={() => setSelectedPlan("mensal")}
+                        className={`w-full p-4 rounded-xl border-2 transition-all text-left relative ${
+                          selectedPlan === "mensal"
+                            ? "border-primary bg-primary/5"
+                            : "border-border bg-card hover:border-primary/50"
+                        }`}
+                      >
+                        <div className="absolute -top-2.5 right-3 px-2 py-0.5 bg-primary text-primary-foreground text-xs font-bold rounded animate-bounce">
+                          Mais Popular
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-semibold text-foreground">Plano Mensal</p>
+                            <p className="text-xs text-muted-foreground">Acesso completo por 30 dias</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xl font-bold text-primary">R$ 19,90</p>
+                            <p className="text-xs text-muted-foreground line-through">R$ 39,90</p>
+                          </div>
+                        </div>
+                      </button>
+
+                      <button
+                        onClick={() => setSelectedPlan("anual")}
+                        className={`w-full p-4 rounded-xl border-2 transition-all text-left relative ${
+                          selectedPlan === "anual"
+                            ? "border-primary bg-primary/5"
+                            : "border-border bg-card hover:border-primary/50"
+                        }`}
+                      >
+                        <div className="absolute -top-2.5 right-3 px-2 py-0.5 bg-green-500 text-white text-xs font-bold rounded">
+                          Economize 50%
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-semibold text-foreground">Plano Anual</p>
+                            <p className="text-xs text-muted-foreground">Melhor custo-beneficio - 12 meses</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xl font-bold text-foreground">R$ 29,90</p>
+                            <p className="text-xs text-muted-foreground line-through">R$ 59,90</p>
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+
+                    {/* Extra photos cost */}
+                    {extraPhotosCost > 0 && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Crown className="w-4 h-4 text-amber-600" />
+                            <span className="text-sm text-amber-800">Fotos extras ({extraPhotosCount})</span>
+                          </div>
+                          <span className="text-sm font-bold text-amber-800">+ R$ {extraPhotosCost.toFixed(2).replace('.', ',')}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Total */}
+                    <div className={`rounded-xl p-4 ${currentTheme.bg} border ${currentTheme.border}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-white/80">Plano {selectedPlan}</span>
+                        <span className="text-white font-medium">R$ {selectedPlan === "mensal" ? "19,90" : "29,90"}</span>
+                      </div>
+                      {extraPhotosCost > 0 && (
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-white/80">Fotos extras</span>
+                          <span className="text-white font-medium">R$ {extraPhotosCost.toFixed(2).replace('.', ',')}</span>
+                        </div>
+                      )}
+                      <div className="border-t border-white/20 pt-2 mt-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-white font-bold">Total</span>
+                          <span className="text-white font-bold text-lg">
+                            R$ {((selectedPlan === "mensal" ? 19.90 : 29.90) + extraPhotosCost).toFixed(2).replace('.', ',')}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Social Proof */}
+                    <div className="bg-secondary/50 rounded-lg p-3 flex items-center gap-3">
+                      <div className="flex -space-x-2">
+                        {[1, 2, 3, 4].map((i) => (
+                          <div key={i} className="w-6 h-6 rounded-full bg-primary/20 border-2 border-card" />
+                        ))}
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-1">
+                          {[1, 2, 3, 4, 5].map((i) => (
+                            <Star key={i} className="w-3 h-3 text-amber-500 fill-amber-500" />
+                          ))}
+                        </div>
+                        <p className="text-xs text-muted-foreground">+2.847 cartas enviadas hoje</p>
+                      </div>
+                    </div>
+
+                    {/* Security Badges */}
+                    <div className="flex items-center justify-center gap-4 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <Lock className="w-3 h-3" /> Pagamento seguro
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Check className="w-3 h-3" /> Satisfacao garantida
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  /* After Payment - Show Link/QR */
+                  <div className="space-y-4">
+                    <div className="text-center">
+                      <div className={`w-16 h-16 rounded-full ${currentTheme.bg} mx-auto mb-4 flex items-center justify-center`}>
+                        <Check className={`w-8 h-8 ${currentTheme.text}`} />
+                      </div>
+                      <h3 className="text-xl font-bold text-foreground mb-2">Pagamento confirmado!</h3>
+                      <p className="text-sm text-muted-foreground">Sua carta esta pronta para ser enviada</p>
+                    </div>
+
+                    {shareMethod === "link" ? (
+                      <div className="space-y-3">
+                        <div className="rounded-xl border border-border bg-card p-4">
+                          <p className="text-xs text-muted-foreground mb-2">Seu link exclusivo:</p>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={generatedLink}
+                              readOnly
+                              className="bg-secondary/50 text-sm"
+                            />
+                            <Button onClick={copyLink} size="icon" variant="outline">
+                              <Link2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        <Button 
+                          onClick={copyLink}
+                          className="w-full h-12 bg-primary text-primary-foreground"
+                        >
+                          Copiar link para compartilhar
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className={`rounded-xl border ${currentTheme.border} ${currentTheme.bg} p-6`}>
+                          <div className="w-48 h-48 mx-auto bg-white rounded-xl flex items-center justify-center relative">
+                            <div className="grid grid-cols-5 gap-1">
+                              {Array.from({ length: 25 }).map((_, i) => (
+                                <div
+                                  key={i}
+                                  className={`w-7 h-7 rounded-sm ${
+                                    [0, 1, 2, 3, 4, 5, 9, 10, 14, 15, 19, 20, 21, 22, 23, 24].includes(i) 
+                                      ? "bg-gray-900" 
+                                      : "bg-gray-200"
+                                  }`}
+                                />
+                              ))}
+                            </div>
+                            {selectedQrStyle === "hearts" && (
+                              <>
+                                <Heart className={`absolute -top-2 -left-2 w-4 h-4 ${currentTheme.text} fill-current`} />
+                                <Heart className={`absolute -top-2 -right-2 w-4 h-4 ${currentTheme.text} fill-current`} />
+                                <Heart className={`absolute -bottom-2 -left-2 w-4 h-4 ${currentTheme.text} fill-current`} />
+                                <Heart className={`absolute -bottom-2 -right-2 w-4 h-4 ${currentTheme.text} fill-current`} />
+                              </>
+                            )}
+                          </div>
+                          <p className="text-center text-sm text-white/80 mt-4">Escaneie para abrir a carta</p>
+                        </div>
+                        <Button className="w-full h-12 bg-primary text-primary-foreground">
+                          Baixar QR Code
+                        </Button>
+                      </div>
+                    )}
+
+                    <p className="text-xs text-center text-muted-foreground">
+                      Para: {partnerName} | Valido por {selectedPlan === "mensal" ? "30 dias" : "12 meses"}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
             {/* Navigation Buttons */}
-            <div className="flex items-center gap-3 mt-6">
-              {currentStep > 1 && (
-                <Button
-                  variant="outline"
-                  onClick={prevStep}
-                  className="flex-1 h-11 bg-transparent border-border text-foreground hover:bg-secondary"
-                >
-                  <ChevronLeft className="w-4 h-4 mr-1" />
-                  Voltar
-                </Button>
-              )}
-              
-              {currentStep < TOTAL_STEPS ? (
-                <Button
-                  onClick={nextStep}
-                  disabled={!canProceed()}
-                  className="flex-1 h-11 bg-primary text-primary-foreground hover:bg-primary/90"
-                >
-                  Continuar
-                  <ChevronRight className="w-4 h-4 ml-1" />
-                </Button>
-              ) : (
-                <Button
-                  className="flex-1 h-11 bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
-                >
-                  <Gift className="w-4 h-4 mr-2" />
-                  Finalizar por R$ {selectedPlan === "mensal" ? "19,90" : "29,90"}
-                </Button>
-              )}
-            </div>
+            {!(currentStep === 7 && isPaid) && (
+              <div className="flex items-center gap-3 mt-6">
+                {currentStep > 1 && !isPaid && (
+                  <Button
+                    variant="outline"
+                    onClick={prevStep}
+                    className="flex-1 h-11 bg-transparent border-border text-foreground hover:bg-secondary"
+                  >
+                    <ChevronLeft className="w-4 h-4 mr-1" />
+                    Voltar
+                  </Button>
+                )}
+                
+                {currentStep < TOTAL_STEPS ? (
+                  <Button
+                    onClick={nextStep}
+                    disabled={!canProceed()}
+                    className="flex-1 h-11 bg-primary text-primary-foreground hover:bg-primary/90"
+                  >
+                    {currentStep === 6 ? "Ver Precos" : "Continuar"}
+                    <ChevronRight className="w-4 h-4 ml-1" />
+                  </Button>
+                ) : (
+                  !isPaid && (
+                    <Button
+                      onClick={handlePayment}
+                      disabled={isProcessingPayment}
+                      className="flex-1 h-12 bg-primary text-primary-foreground hover:bg-primary/90 font-bold text-base shadow-lg"
+                    >
+                      {isProcessingPayment ? (
+                        <>
+                          <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                          Processando...
+                        </>
+                      ) : (
+                        <>
+                          <Gift className="w-5 h-5 mr-2" />
+                          Pagar R$ {((selectedPlan === "mensal" ? 19.90 : 29.90) + extraPhotosCost).toFixed(2).replace('.', ',')}
+                        </>
+                      )}
+                    </Button>
+                  )
+                )}
+              </div>
+            )}
           </div>
 
           {/* Preview Section - Desktop */}
@@ -834,7 +1367,7 @@ export default function CriarCartaPage() {
               <p className="text-xs text-muted-foreground text-center mb-2">Pre-visualizacao ao vivo</p>
               
               {/* Card Preview or QR Preview */}
-              {currentStep === 5 && shareMethod === "qr" ? (
+              {(currentStep === 6 || currentStep === 7) && shareMethod === "qr" ? (
                 // QR Code Preview
                 <div className="relative w-full max-w-[180px] mx-auto">
                   <div className="bg-card rounded-2xl p-4 border border-border shadow-lg">
@@ -875,30 +1408,45 @@ export default function CriarCartaPage() {
                     {/* Phone Screen */}
                     <div className={`w-full h-full rounded-xl overflow-hidden bg-gradient-to-b ${currentTheme.gradient} relative`}>
                       <div className="absolute inset-0 p-2 pt-4 flex flex-col items-center overflow-hidden">
-                        {/* Floating Decorations */}
+                        {/* Floating Decorations - Hearts pulsing */}
                         {selectedDecorations.includes("hearts") && (
                           <>
-                            <Heart className={`absolute top-5 left-2 w-2 h-2 ${currentTheme.text} fill-current opacity-70 animate-bounce`} style={{ animationDelay: "0s", animationDuration: "2s" }} />
-                            <Heart className={`absolute top-8 right-3 w-1.5 h-1.5 ${currentTheme.text} fill-current opacity-50 animate-bounce`} style={{ animationDelay: "0.5s", animationDuration: "2.5s" }} />
-                            <Heart className={`absolute bottom-16 left-3 w-2 h-2 ${currentTheme.text} fill-current opacity-60 animate-bounce`} style={{ animationDelay: "1s", animationDuration: "2.2s" }} />
+                            <Heart className={`absolute top-5 left-2 w-2.5 h-2.5 ${currentTheme.text} fill-current animate-heart-pulse`} />
+                            <Heart className={`absolute top-8 right-3 w-2 h-2 ${currentTheme.text} fill-current animate-heart-pulse-fast`} />
+                            <Heart className={`absolute bottom-16 left-3 w-2.5 h-2.5 ${currentTheme.text} fill-current animate-heart-pulse-slow`} />
+                            <Heart className={`absolute top-14 left-1 w-1.5 h-1.5 ${currentTheme.text} fill-current animate-heart-pulse`} style={{ animationDelay: '0.3s' }} />
+                            <Heart className={`absolute bottom-24 right-2 w-2 h-2 ${currentTheme.text} fill-current animate-heart-pulse-fast`} style={{ animationDelay: '0.6s' }} />
+                            <Heart className={`absolute top-20 right-1 w-1.5 h-1.5 ${currentTheme.text} fill-current animate-heart-pulse-slow`} style={{ animationDelay: '0.2s' }} />
+                            <Heart className={`absolute bottom-32 left-1 w-2 h-2 ${currentTheme.text} fill-current animate-heart-pulse`} style={{ animationDelay: '0.5s' }} />
                           </>
                         )}
+                        {/* Stars falling */}
                         {selectedDecorations.includes("stars") && (
                           <>
-                            <Star className={`absolute top-6 right-2 w-2 h-2 ${currentTheme.text} fill-current opacity-70 animate-pulse`} style={{ animationDelay: "0.2s" }} />
-                            <Star className={`absolute top-12 left-4 w-1.5 h-1.5 ${currentTheme.text} fill-current opacity-50 animate-pulse`} style={{ animationDelay: "0.7s" }} />
+                            <Star className={`absolute top-0 left-[20%] w-2 h-2 ${currentTheme.text} fill-current animate-star-fall-1`} />
+                            <Star className={`absolute top-0 right-[15%] w-1.5 h-1.5 ${currentTheme.text} fill-current animate-star-fall-2`} />
+                            <Star className={`absolute top-0 left-[50%] w-2 h-2 ${currentTheme.text} fill-current animate-star-fall-3`} />
+                            <Star className={`absolute top-0 right-[40%] w-1.5 h-1.5 ${currentTheme.text} fill-current animate-star-fall-4`} />
+                            <Star className={`absolute top-0 left-[70%] w-2 h-2 ${currentTheme.text} fill-current animate-star-fall-1`} style={{ animationDelay: '2s' }} />
                           </>
                         )}
+                        {/* Sparkles moving randomly */}
                         {selectedDecorations.includes("sparkles") && (
                           <>
-                            <Sparkles className={`absolute top-4 right-4 w-2.5 h-2.5 ${currentTheme.text} opacity-60 animate-pulse`} style={{ animationDelay: "0.3s" }} />
-                            <Sparkles className={`absolute bottom-20 right-2 w-2 h-2 ${currentTheme.text} opacity-50 animate-pulse`} style={{ animationDelay: "0.8s" }} />
+                            <Sparkles className={`absolute top-6 right-4 w-2.5 h-2.5 ${currentTheme.text} animate-sparkle-random-1`} />
+                            <Sparkles className={`absolute bottom-20 right-2 w-2 h-2 ${currentTheme.text} animate-sparkle-random-2`} />
+                            <Sparkles className={`absolute top-16 left-2 w-2.5 h-2.5 ${currentTheme.text} animate-sparkle-random-3`} />
+                            <Sparkles className={`absolute bottom-28 left-1 w-2 h-2 ${currentTheme.text} animate-sparkle-random-4`} />
+                            <Sparkles className={`absolute top-24 right-1 w-1.5 h-1.5 ${currentTheme.text} animate-sparkle-random-1`} style={{ animationDelay: '1.5s' }} />
                           </>
                         )}
+                        {/* Flowers swaying */}
                         {selectedDecorations.includes("flowers") && (
                           <>
-                            <Flower2 className={`absolute top-7 left-3 w-2 h-2 ${currentTheme.text} opacity-60 animate-pulse`} style={{ animationDelay: "0.4s" }} />
-                            <Flower2 className={`absolute bottom-24 right-3 w-2 h-2 ${currentTheme.text} opacity-50 animate-pulse`} style={{ animationDelay: "0.9s" }} />
+                            <Flower2 className={`absolute top-7 left-3 w-2.5 h-2.5 ${currentTheme.text} animate-sway`} />
+                            <Flower2 className={`absolute bottom-24 right-3 w-2.5 h-2.5 ${currentTheme.text} animate-sway-delayed`} />
+                            <Flower2 className={`absolute top-20 right-1 w-2 h-2 ${currentTheme.text} animate-sway`} style={{ animationDelay: '0.5s' }} />
+                            <Flower2 className={`absolute bottom-32 left-2 w-2 h-2 ${currentTheme.text} animate-sway-delayed`} style={{ animationDelay: '0.3s' }} />
                           </>
                         )}
 
@@ -922,16 +1470,38 @@ export default function CriarCartaPage() {
                         {/* Photos Grid */}
                         {photos.length > 0 && (
                           <div className="w-full mb-2">
-                            <div className="grid grid-cols-2 gap-0.5">
-                              {photos.slice(0, 2).map((_, index) => (
-                                <div 
-                                  key={index} 
-                                  className={`aspect-square rounded ${currentTheme.bg} border ${currentTheme.border} flex items-center justify-center`}
-                                >
-                                  <Heart className={`w-3 h-3 ${currentTheme.text} opacity-30`} />
-                                </div>
-                              ))}
-                            </div>
+                            {timelineMode ? (
+                              // Mini timeline view
+                              <div className="relative pl-3">
+                                <div className={`absolute left-1 top-0 bottom-0 w-0.5 bg-gradient-to-b ${currentTheme.gradient}`} />
+                                {photos.slice(0, 3).map((photo, index) => (
+                                  <div key={index} className="relative mb-1 last:mb-0 flex items-center gap-1.5">
+                                    <div className={`absolute -left-2 w-1.5 h-1.5 rounded-full ${
+                                      selectedTheme === 'red' ? 'bg-red-500' :
+                                      selectedTheme === 'pink' ? 'bg-pink-500' :
+                                      selectedTheme === 'purple' ? 'bg-purple-500' :
+                                      selectedTheme === 'blue' ? 'bg-blue-400' :
+                                      'bg-amber-500'
+                                    }`} />
+                                    <div className="w-8 h-8 rounded overflow-hidden relative">
+                                      <Image src={photo.url} alt="" fill className="object-cover" />
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              // Grid view
+                              <div className="grid grid-cols-2 gap-0.5">
+                                {photos.slice(0, 4).map((photo, index) => (
+                                  <div 
+                                    key={index} 
+                                    className={`aspect-square rounded overflow-hidden relative ${currentTheme.border} border`}
+                                  >
+                                    <Image src={photo.url} alt="" fill className="object-cover" />
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -994,7 +1564,7 @@ export default function CriarCartaPage() {
               <X className="w-4 h-4 text-foreground" />
             </button>
             
-            {currentStep === 5 && shareMethod === "qr" ? (
+            {(currentStep === 6 || currentStep === 7) && shareMethod === "qr" ? (
               // QR Code Preview Mobile
               <div className="bg-card rounded-2xl p-6 border border-border shadow-lg mx-auto max-w-[200px]">
                 <div className={`aspect-square rounded-xl ${currentTheme.bg} border-2 ${currentTheme.border} flex items-center justify-center mb-4 relative overflow-hidden`}>
@@ -1029,20 +1599,40 @@ export default function CriarCartaPage() {
                   <div className="absolute top-0 left-1/2 -translate-x-1/2 w-16 h-4 bg-gray-900 rounded-b-xl z-20" />
                   <div className={`w-full h-full rounded-2xl overflow-hidden bg-gradient-to-b ${currentTheme.gradient} relative`}>
                     <div className="absolute inset-0 p-3 pt-5 flex flex-col items-center overflow-hidden">
+                      {/* Hearts pulsing */}
                       {selectedDecorations.includes("hearts") && (
                         <>
-                          <Heart className={`absolute top-6 left-3 w-3 h-3 ${currentTheme.text} fill-current opacity-70 animate-bounce`} style={{ animationDelay: "0s", animationDuration: "2s" }} />
-                          <Heart className={`absolute top-10 right-4 w-2 h-2 ${currentTheme.text} fill-current opacity-50 animate-bounce`} style={{ animationDelay: "0.5s", animationDuration: "2.5s" }} />
+                          <Heart className={`absolute top-6 left-3 w-3 h-3 ${currentTheme.text} fill-current animate-heart-pulse`} />
+                          <Heart className={`absolute top-10 right-4 w-2.5 h-2.5 ${currentTheme.text} fill-current animate-heart-pulse-fast`} />
+                          <Heart className={`absolute bottom-20 left-2 w-3 h-3 ${currentTheme.text} fill-current animate-heart-pulse-slow`} />
+                          <Heart className={`absolute top-16 right-2 w-2 h-2 ${currentTheme.text} fill-current animate-heart-pulse`} style={{ animationDelay: '0.4s' }} />
+                          <Heart className={`absolute bottom-32 right-3 w-2.5 h-2.5 ${currentTheme.text} fill-current animate-heart-pulse-fast`} style={{ animationDelay: '0.2s' }} />
                         </>
                       )}
+                      {/* Stars falling */}
                       {selectedDecorations.includes("stars") && (
                         <>
-                          <Star className={`absolute top-8 right-3 w-2.5 h-2.5 ${currentTheme.text} fill-current opacity-70 animate-pulse`} />
+                          <Star className={`absolute top-0 left-[25%] w-2.5 h-2.5 ${currentTheme.text} fill-current animate-star-fall-1`} />
+                          <Star className={`absolute top-0 right-[20%] w-2 h-2 ${currentTheme.text} fill-current animate-star-fall-2`} />
+                          <Star className={`absolute top-0 left-[60%] w-2.5 h-2.5 ${currentTheme.text} fill-current animate-star-fall-3`} />
+                          <Star className={`absolute top-0 right-[45%] w-2 h-2 ${currentTheme.text} fill-current animate-star-fall-4`} />
                         </>
                       )}
+                      {/* Sparkles random movement */}
                       {selectedDecorations.includes("sparkles") && (
                         <>
-                          <Sparkles className={`absolute top-5 right-5 w-3 h-3 ${currentTheme.text} opacity-60 animate-pulse`} />
+                          <Sparkles className={`absolute top-8 right-5 w-3 h-3 ${currentTheme.text} animate-sparkle-random-1`} />
+                          <Sparkles className={`absolute bottom-28 right-3 w-2.5 h-2.5 ${currentTheme.text} animate-sparkle-random-2`} />
+                          <Sparkles className={`absolute top-20 left-3 w-3 h-3 ${currentTheme.text} animate-sparkle-random-3`} />
+                          <Sparkles className={`absolute bottom-36 left-2 w-2.5 h-2.5 ${currentTheme.text} animate-sparkle-random-4`} />
+                        </>
+                      )}
+                      {/* Flowers swaying */}
+                      {selectedDecorations.includes("flowers") && (
+                        <>
+                          <Flower2 className={`absolute top-12 left-2 w-3 h-3 ${currentTheme.text} animate-sway`} />
+                          <Flower2 className={`absolute bottom-16 right-4 w-3 h-3 ${currentTheme.text} animate-sway-delayed`} />
+                          <Flower2 className={`absolute top-24 right-2 w-2.5 h-2.5 ${currentTheme.text} animate-sway`} style={{ animationDelay: '0.5s' }} />
                         </>
                       )}
                       
