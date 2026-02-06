@@ -1,35 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
-
-// In-memory storage for demo (in production, use a database like Supabase or Neon)
-const cartas: Record<string, {
-  id: string
-  partnerName: string
-  senderName: string
-  message: string
-  selectedTheme: string
-  selectedDecorations: string[]
-  photos: string[]
-  timelineMode: boolean
-  musicUrl: string
-  countdownEnabled: boolean
-  togetherDate: string
-  selectedRelationship: string
-  email: string
-  isPaid: boolean
-  paymentId?: string
-  createdAt: string
-}> = {}
+import { cartasStore } from '@/lib/store'
+import type { CartaData } from '@/lib/store'
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const { id, ...data } = body
     
-    cartas[id] = {
+    cartasStore[id] = {
       id,
       ...data,
+      status: 'editing',
       createdAt: new Date().toISOString(),
-    }
+    } as CartaData
     
     return NextResponse.json({ success: true, id })
   } catch (error) {
@@ -41,12 +24,18 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const id = searchParams.get('id')
+  const all = searchParams.get('all')
+  
+  // Return all cartas for admin
+  if (all === 'true') {
+    return NextResponse.json(Object.values(cartasStore))
+  }
   
   if (!id) {
     return NextResponse.json({ error: 'Carta ID required' }, { status: 400 })
   }
   
-  const carta = cartas[id]
+  const carta = cartasStore[id]
   
   if (!carta) {
     return NextResponse.json({ error: 'Carta not found' }, { status: 404 })
@@ -59,11 +48,14 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
-    const { id, isPaid, paymentId } = body
+    const { id, isPaid, paymentId, status, amountPaid, plan } = body
     
-    if (cartas[id]) {
-      cartas[id].isPaid = isPaid
-      cartas[id].paymentId = paymentId
+    if (cartasStore[id]) {
+      if (isPaid !== undefined) cartasStore[id].isPaid = isPaid
+      if (paymentId !== undefined) cartasStore[id].paymentId = paymentId
+      if (status !== undefined) cartasStore[id].status = status
+      if (amountPaid !== undefined) cartasStore[id].amountPaid = amountPaid
+      if (plan !== undefined) cartasStore[id].plan = plan
       return NextResponse.json({ success: true })
     }
     

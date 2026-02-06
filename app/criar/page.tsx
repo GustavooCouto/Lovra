@@ -112,11 +112,12 @@ const qrCodeStyles = [
   { id: "gradient", label: "Colorido", description: "Gradiente" },
 ]
 
-const TOTAL_STEPS = 7
+const TOTAL_STEPS = 8
 const FREE_PHOTO_LIMIT = 5
 const EXTRA_PHOTOS_PRICE = 4.90
 const DECORATION_PRICE = 1.00
 const THEME_CHANGE_PRICE = 1.00
+const TIMELINE_PHOTO_PRICE = 2.50
 const DEFAULT_THEME = "red"
 
 export default function CriarCartaPage() {
@@ -142,6 +143,7 @@ export default function CriarCartaPage() {
   const [showTransition, setShowTransition] = useState(false)
   const [showSuggestionsModal, setShowSuggestionsModal] = useState(false)
   const [timelineMode, setTimelineMode] = useState(false)
+  const [timelineData, setTimelineData] = useState<Record<number, { caption: string; year: string }>>({})
   const [wantsExtraPhotos, setWantsExtraPhotos] = useState(false)
   const [isPaid, setIsPaid] = useState(false)
   const [isProcessingPayment, setIsProcessingPayment] = useState(false)
@@ -160,7 +162,8 @@ export default function CriarCartaPage() {
   const extraPhotosCost = extraPhotosCount > 0 ? EXTRA_PHOTOS_PRICE : 0
   const decorationsCost = selectedDecorations.length * DECORATION_PRICE
   const themeCost = hasChangedTheme && selectedTheme !== DEFAULT_THEME ? THEME_CHANGE_PRICE : 0
-  const totalExtrasCost = extraPhotosCost + decorationsCost + themeCost
+  const timelineCost = timelineMode ? photos.length * TIMELINE_PHOTO_PRICE : 0
+  const totalExtrasCost = extraPhotosCost + decorationsCost + themeCost + timelineCost
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -201,6 +204,8 @@ export default function CriarCartaPage() {
         return true
       case 7:
         return true
+      case 8:
+        return true
       default:
         return false
     }
@@ -208,11 +213,11 @@ export default function CriarCartaPage() {
 
   const nextStep = () => {
     if (currentStep < TOTAL_STEPS && canProceed()) {
-      if (currentStep === 6) {
+      if (currentStep === 7) {
         setShowTransition(true)
         setTimeout(() => {
           setShowTransition(false)
-          setCurrentStep(7)
+          setCurrentStep(8)
         }, 4000)
       } else {
         setCurrentStep(currentStep + 1)
@@ -222,8 +227,8 @@ export default function CriarCartaPage() {
 
   const getPaymentAmount = useCallback(() => {
     const basePlan = selectedPlan === "unico" ? 17.89 : 39.89
-    return basePlan + extraPhotosCost
-  }, [selectedPlan, extraPhotosCost])
+    return basePlan + extraPhotosCost + timelineCost
+  }, [selectedPlan, extraPhotosCost, timelineCost])
 
   const handleCreatePayment = async () => {
     if (!customerEmail || !customerEmail.includes('@')) {
@@ -247,12 +252,16 @@ export default function CriarCartaPage() {
       selectedDecorations,
       photos: photos.map(p => p.url),
       timelineMode,
+      timelineData,
       musicUrl,
       countdownEnabled,
       togetherDate,
       selectedRelationship,
       email: customerEmail,
       isPaid: false,
+      status: 'editing',
+      amountPaid: 0,
+      plan: selectedPlan,
       createdAt: new Date().toISOString()
     }
     
@@ -337,7 +346,7 @@ export default function CriarCartaPage() {
           await fetch('/api/cartas', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: cartaIdParam, isPaid: true, paymentId })
+            body: JSON.stringify({ id: cartaIdParam, isPaid: true, paymentId, status: 'paid', amountPaid: getPaymentAmount(), plan: selectedPlan })
           })
         } else if (data.status === 'rejected') {
           clearInterval(pollInterval)
@@ -400,8 +409,10 @@ export default function CriarCartaPage() {
       case 5:
         return "Toques finais"
       case 6:
-        return "Como quer compartilhar?"
+        return "Modo Timeline"
       case 7:
+        return "Como quer compartilhar?"
+      case 8:
         return isPaid ? "Sua carta esta pronta!" : "Finalize sua carta!"
       default:
         return ""
@@ -640,8 +651,9 @@ export default function CriarCartaPage() {
             {currentStep === 3 && "Adicione momentos especiais"}
             {currentStep === 4 && "Deixe com a sua cara"}
             {currentStep === 5 && "Detalhes que fazem a diferenca"}
-            {currentStep === 6 && "Escolha como enviar sua carta"}
-            {currentStep === 7 && (isPaid ? "Compartilhe com quem voce ama" : "Complete seu pedido")}
+            {currentStep === 6 && "Crie uma linha do tempo com suas fotos"}
+            {currentStep === 7 && "Escolha como enviar sua carta"}
+            {currentStep === 8 && (isPaid ? "Compartilhe com quem voce ama" : "Complete seu pedido")}
           </p>
         </div>
 
@@ -913,91 +925,40 @@ export default function CriarCartaPage() {
                 {/* Photos grid or timeline */}
                 {photos.length > 0 && (
                   <div className="space-y-3">
-                    {/* Timeline toggle */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-foreground">Modo Timeline</span>
-                      <button
-                        onClick={() => setTimelineMode(!timelineMode)}
-                        className={`w-10 h-5 rounded-full transition-colors ${timelineMode ? "bg-primary" : "bg-muted-foreground/30"}`}
-                      >
-                        <div className={`w-4 h-4 rounded-full bg-card transition-transform mx-0.5 ${timelineMode ? "translate-x-5" : ""}`} />
-                      </button>
-                    </div>
-                    
-                    {timelineMode ? (
-                      // Timeline view
-                      <div className="relative pl-6">
-                        <div className={`absolute left-2 top-0 bottom-0 w-0.5 bg-gradient-to-b ${currentTheme.gradient}`} />
-                        {photos.map((photo, index) => (
-                          <div key={index} className="relative mb-4 last:mb-0">
-                            <div className={`absolute -left-4 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full ${
-                              selectedTheme === 'red' ? 'bg-red-500' :
-                              selectedTheme === 'pink' ? 'bg-pink-500' :
-                              selectedTheme === 'purple' ? 'bg-purple-500' :
-                              selectedTheme === 'blue' ? 'bg-blue-400' :
-                              'bg-amber-500'
-                            } border-2 border-background`} />
-                            <div className="flex items-center gap-3 bg-secondary/50 rounded-lg p-2">
-                              <div className="w-16 h-16 rounded-lg overflow-hidden bg-secondary flex-shrink-0 relative">
-                                <Image
-                                  src={photo.url}
-                                  alt={`Foto ${index + 1}`}
-                                  fill
-                                  className="object-cover"
-                                />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium text-foreground">Momento {index + 1}</p>
-                                <p className="text-xs text-muted-foreground">
-                                  {index >= FREE_PHOTO_LIMIT ? '(Foto extra)' : 'Gratis'}
-                                </p>
-                              </div>
-                              <button
-                                onClick={() => removePhoto(index)}
-                                className="w-7 h-7 bg-destructive/10 hover:bg-destructive/20 text-destructive rounded-full flex items-center justify-center transition-colors"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
+                    {/* Grid view only */}
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                      {photos.map((photo, index) => (
+                        <div key={index} className="aspect-square rounded-lg overflow-hidden relative group">
+                          <Image
+                            src={photo.url}
+                            alt={`Foto ${index + 1}`}
+                            fill
+                            className="object-cover"
+                          />
+                          {index >= FREE_PHOTO_LIMIT && (
+                            <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-primary/90 rounded text-[8px] text-primary-foreground font-medium">
+                              Extra
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      // Grid view
-                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                        {photos.map((photo, index) => (
-                          <div key={index} className="aspect-square rounded-lg overflow-hidden relative group">
-                            <Image
-                              src={photo.url}
-                              alt={`Foto ${index + 1}`}
-                              fill
-                              className="object-cover"
-                            />
-                            {index >= FREE_PHOTO_LIMIT && (
-                              <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-primary/90 rounded text-[8px] text-primary-foreground font-medium">
-                                Extra
-                              </div>
-                            )}
-                            <button
-                              onClick={() => removePhoto(index)}
-                              className="absolute top-1 right-1 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                        ))}
-                        
-                        {/* Add more button */}
-                        {((photos.length < FREE_PHOTO_LIMIT) || (wantsExtraPhotos && photos.length < 10)) && (
+                          )}
                           <button
-                            onClick={() => fileInputRef.current?.click()}
-                            className="aspect-square rounded-lg border-2 border-dashed border-border hover:border-primary/50 flex items-center justify-center transition-colors"
+                            onClick={() => removePhoto(index)}
+                            className="absolute top-1 right-1 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                           >
-                            <Plus className="w-6 h-6 text-muted-foreground" />
+                            <X className="w-3 h-3" />
                           </button>
-                        )}
-                      </div>
-                    )}
+                        </div>
+                      ))}
+                      
+                      {/* Add more button */}
+                      {((photos.length < FREE_PHOTO_LIMIT) || (wantsExtraPhotos && photos.length < 10)) && (
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="aspect-square rounded-lg border-2 border-dashed border-border hover:border-primary/50 flex items-center justify-center transition-colors"
+                        >
+                          <Plus className="w-6 h-6 text-muted-foreground" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -1139,7 +1100,7 @@ export default function CriarCartaPage() {
                     </div>
                     <div className="flex justify-between">
                       <span>Fotos:</span>
-                      <span className="font-medium text-white">{photos.length} foto{photos.length !== 1 ? 's' : ''} {timelineMode && photos.length > 0 ? '(Timeline)' : ''}</span>
+                      <span className="font-medium text-white">{photos.length} foto{photos.length !== 1 ? 's' : ''}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Enfeites:</span>
@@ -1199,13 +1160,134 @@ export default function CriarCartaPage() {
                 </div>
 
                 <p className="text-xs text-center text-muted-foreground">
-                  Tudo certo? Avance para escolher como compartilhar!
+                  Tudo certo? Avance para o proximo passo!
                 </p>
               </div>
             )}
 
-            {/* Step 6: Sharing Options */}
+            {/* Step 6: Timeline Mode */}
             {currentStep === 6 && (
+              <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                {photos.length === 0 ? (
+                  <div className="text-center py-8">
+                    <ImagePlus className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+                    <p className="text-foreground font-medium mb-1">Nenhuma foto adicionada</p>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Volte ao passo 3 para adicionar fotos e desbloquear o modo Timeline
+                    </p>
+                    <Button variant="outline" onClick={() => goToStep(3)} className="gap-2">
+                      <ChevronLeft className="w-4 h-4" />
+                      Voltar para fotos
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    {/* Timeline toggle and pricing info */}
+                    <div className={`rounded-xl p-4 border ${timelineMode ? 'border-primary bg-primary/5' : 'border-border bg-card'}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-5 h-5 text-primary" />
+                          <span className="font-medium text-foreground">Ativar Modo Timeline</span>
+                        </div>
+                        <button
+                          onClick={() => setTimelineMode(!timelineMode)}
+                          className={`w-11 h-6 rounded-full transition-colors ${timelineMode ? "bg-primary" : "bg-muted-foreground/30"}`}
+                        >
+                          <div className={`w-5 h-5 rounded-full bg-card transition-transform mx-0.5 ${timelineMode ? "translate-x-5" : ""}`} />
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Transforme suas fotos em uma linha do tempo com datas e descricoes.
+                      </p>
+                      <div className="mt-2 flex items-center gap-2 text-xs">
+                        <span className="px-2 py-0.5 bg-primary/10 text-primary rounded-full font-medium">
+                          R$ {TIMELINE_PHOTO_PRICE.toFixed(2).replace('.', ',')} por foto
+                        </span>
+                        {timelineMode && photos.length > 0 && (
+                          <span className="text-muted-foreground">
+                            Total: R$ {(photos.length * TIMELINE_PHOTO_PRICE).toFixed(2).replace('.', ',')} ({photos.length} foto{photos.length !== 1 ? 's' : ''})
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {timelineMode && (
+                      <div className="space-y-3 animate-in fade-in duration-300">
+                        <p className="text-sm text-muted-foreground">Adicione uma data e descricao para cada foto:</p>
+                        
+                        <div className="relative pl-6">
+                          <div className={`absolute left-2 top-0 bottom-0 w-0.5 bg-gradient-to-b ${currentTheme.gradient}`} />
+                          {photos.map((photo, index) => (
+                            <div key={index} className="relative mb-5 last:mb-0">
+                              <div className={`absolute -left-4 top-4 w-3 h-3 rounded-full ${
+                                selectedTheme === 'red' ? 'bg-red-500' :
+                                selectedTheme === 'pink' ? 'bg-pink-500' :
+                                selectedTheme === 'purple' ? 'bg-purple-500' :
+                                selectedTheme === 'blue' ? 'bg-blue-400' :
+                                'bg-amber-500'
+                              } border-2 border-background`} />
+                              <div className="bg-secondary/50 rounded-xl p-3 space-y-2">
+                                <div className="flex items-start gap-3">
+                                  <div className="w-20 h-20 rounded-lg overflow-hidden bg-secondary flex-shrink-0 relative">
+                                    <Image
+                                      src={photo.url}
+                                      alt={`Foto ${index + 1}`}
+                                      fill
+                                      className="object-cover"
+                                    />
+                                  </div>
+                                  <div className="flex-1 min-w-0 space-y-2">
+                                    <div>
+                                      <Label className="text-xs text-muted-foreground mb-1 block">Ano / Data</Label>
+                                      <Input
+                                        placeholder="Ex: 2021, Jan 2023..."
+                                        value={timelineData[index]?.year || ''}
+                                        onChange={(e) => {
+                                          setTimelineData(prev => ({
+                                            ...prev,
+                                            [index]: { ...prev[index], year: e.target.value, caption: prev[index]?.caption || '' }
+                                          }))
+                                        }}
+                                        className="bg-card border-border text-foreground h-8 text-xs"
+                                      />
+                                    </div>
+                                    <div>
+                                      <Label className="text-xs text-muted-foreground mb-1 block">Descricao</Label>
+                                      <Input
+                                        placeholder="O que aconteceu nesse momento?"
+                                        value={timelineData[index]?.caption || ''}
+                                        onChange={(e) => {
+                                          setTimelineData(prev => ({
+                                            ...prev,
+                                            [index]: { ...prev[index], caption: e.target.value, year: prev[index]?.year || '' }
+                                          }))
+                                        }}
+                                        className="bg-card border-border text-foreground h-8 text-xs"
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {!timelineMode && (
+                      <div className="text-center py-4">
+                        <p className="text-sm text-muted-foreground">
+                          Ative o modo Timeline para adicionar datas e descricoes as suas fotos, ou pule esta etapa.
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Step 7: Sharing Options */}
+            {currentStep === 7 && (
               <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                 {/* Sharing Options */}
                 <div>
@@ -1275,8 +1357,8 @@ export default function CriarCartaPage() {
               </div>
             )}
 
-            {/* Step 7: Payment */}
-            {currentStep === 7 && (
+            {/* Step 8: Payment */}
+            {currentStep === 8 && (
               <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
                 {!isPaid ? (
                   !showPixPayment ? (
@@ -1380,12 +1462,18 @@ export default function CriarCartaPage() {
                           <span className="text-white/80">Plano {selectedPlan === "unico" ? "Unico" : "Mensal"}</span>
                           <span className="text-white font-medium">R$ {selectedPlan === "unico" ? "17,89" : "39,89"}</span>
                         </div>
-                        {extraPhotosCost > 0 && (
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-white/80">Fotos extras</span>
-                            <span className="text-white font-medium">R$ {extraPhotosCost.toFixed(2).replace('.', ',')}</span>
-                          </div>
-                        )}
+                      {extraPhotosCost > 0 && (
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-white/80">Fotos extras</span>
+                          <span className="text-white font-medium">R$ {extraPhotosCost.toFixed(2).replace('.', ',')}</span>
+                        </div>
+                      )}
+                      {timelineCost > 0 && (
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-white/80">Modo Timeline ({photos.length} fotos)</span>
+                          <span className="text-white font-medium">R$ {timelineCost.toFixed(2).replace('.', ',')}</span>
+                        </div>
+                      )}
                         <div className="border-t border-white/20 pt-2 mt-2">
                           <div className="flex items-center justify-between">
                             <span className="text-white font-bold">Total</span>
@@ -1533,75 +1621,88 @@ export default function CriarCartaPage() {
                       )}
                     </div>
 
-                    {shareMethod === "link" ? (
-                      <div className="space-y-3">
-                        <div className="rounded-xl border border-border bg-card p-4">
-                          <p className="text-xs text-muted-foreground mb-2">Seu link exclusivo:</p>
-                          <div className="flex items-center gap-2">
-                            <Input
-                              value={generatedLink}
-                              readOnly
-                              className="bg-secondary/50 text-sm"
-                            />
-                            <Button onClick={copyLink} size="icon" variant="outline">
-                              <Copy className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button 
-                            onClick={copyLink}
-                            className="h-12 bg-primary text-primary-foreground"
-                          >
-                            <Copy className="w-4 h-4 mr-2" />
-                            Copiar link
-                          </Button>
-                          <Button 
-                            onClick={() => window.open(generatedLink, '_blank')}
-                            variant="outline"
-                            className="h-12"
-                          >
-                            <ExternalLink className="w-4 h-4 mr-2" />
-                            Abrir carta
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <div className={`rounded-xl border ${currentTheme.border} ${currentTheme.bg} p-6`}>
-                          <div className="w-48 h-48 mx-auto bg-white rounded-xl flex items-center justify-center relative p-2">
-                            {/* Generate QR Code for carta link */}
-                            <div className="text-center">
-                              <QrCode className="w-20 h-20 mx-auto text-gray-800 mb-2" />
-                              <p className="text-xs text-gray-600 font-medium">Escaneie para abrir</p>
+                    {/* Always show both QR and link for sharing */}
+                    <div className="space-y-4">
+                      {/* QR Code */}
+                      {generatedLink && (
+                        <div className="rounded-xl border border-border bg-card p-6">
+                          <div className="flex justify-center mb-4">
+                            <div className="bg-white p-3 rounded-xl relative">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(generatedLink)}&margin=0`}
+                                alt="QR Code da carta"
+                                width={200}
+                                height={200}
+                                className="rounded-lg"
+                              />
+                              {selectedQrStyle === "hearts" && (
+                                <>
+                                  <Heart className={`absolute -top-2 -left-2 w-4 h-4 ${currentTheme.text} fill-current`} />
+                                  <Heart className={`absolute -top-2 -right-2 w-4 h-4 ${currentTheme.text} fill-current`} />
+                                  <Heart className={`absolute -bottom-2 -left-2 w-4 h-4 ${currentTheme.text} fill-current`} />
+                                  <Heart className={`absolute -bottom-2 -right-2 w-4 h-4 ${currentTheme.text} fill-current`} />
+                                </>
+                              )}
                             </div>
-                            {selectedQrStyle === "hearts" && (
-                              <>
-                                <Heart className={`absolute -top-2 -left-2 w-4 h-4 ${currentTheme.text} fill-current`} />
-                                <Heart className={`absolute -top-2 -right-2 w-4 h-4 ${currentTheme.text} fill-current`} />
-                                <Heart className={`absolute -bottom-2 -left-2 w-4 h-4 ${currentTheme.text} fill-current`} />
-                                <Heart className={`absolute -bottom-2 -right-2 w-4 h-4 ${currentTheme.text} fill-current`} />
-                              </>
-                            )}
                           </div>
-                          <p className="text-center text-sm text-white/80 mt-4">Escaneie para abrir a carta</p>
+                          <p className="text-center text-sm text-muted-foreground mb-1">Escaneie para abrir a carta</p>
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button className="h-12 bg-primary text-primary-foreground">
-                            <Download className="w-4 h-4 mr-2" />
-                            Baixar QR
-                          </Button>
-                          <Button 
-                            onClick={() => window.open(generatedLink, '_blank')}
-                            variant="outline"
-                            className="h-12"
-                          >
-                            <ExternalLink className="w-4 h-4 mr-2" />
-                            Ver carta
+                      )}
+
+                      {/* Link section */}
+                      <div className="rounded-xl border border-border bg-card p-4">
+                        <p className="text-xs text-muted-foreground mb-2">Seu link exclusivo:</p>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={generatedLink}
+                            readOnly
+                            className="bg-secondary/50 text-sm"
+                          />
+                          <Button onClick={copyLink} size="icon" variant="outline">
+                            <Copy className="w-4 h-4" />
                           </Button>
                         </div>
                       </div>
-                    )}
+
+                      {/* Action buttons */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button 
+                          onClick={copyLink}
+                          className="h-12 bg-primary text-primary-foreground"
+                        >
+                          <Copy className="w-4 h-4 mr-2" />
+                          Copiar link
+                        </Button>
+                        <Button 
+                          onClick={() => window.open(generatedLink, '_blank')}
+                          variant="outline"
+                          className="h-12"
+                        >
+                          <ExternalLink className="w-4 h-4 mr-2" />
+                          Abrir carta
+                        </Button>
+                      </div>
+
+                      {/* Download QR button */}
+                      {generatedLink && (
+                        <Button 
+                          variant="outline" 
+                          className="w-full h-11"
+                          onClick={() => {
+                            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(generatedLink)}&margin=8`
+                            const link = document.createElement('a')
+                            link.href = qrUrl
+                            link.download = `lovra-carta-${cartaId}.png`
+                            link.target = '_blank'
+                            link.click()
+                          }}
+                        >
+                          <Download className="w-4 h-4 mr-2" />
+                          Baixar QR Code
+                        </Button>
+                      )}
+                    </div>
 
                     <p className="text-xs text-center text-muted-foreground">
                       Para: {partnerName} | {selectedPlan === "unico" ? "Acesso permanente" : "Assinatura mensal"}
@@ -1612,7 +1713,7 @@ export default function CriarCartaPage() {
             )}
 
             {/* Navigation Buttons */}
-            {!(currentStep === 7 && isPaid) && (
+            {!(currentStep === 8 && isPaid) && (
               <div className="flex items-center gap-3 mt-8 pt-4 border-t border-border/50">
                 {currentStep > 1 && !isPaid && (
                   <Button
@@ -1636,7 +1737,7 @@ export default function CriarCartaPage() {
                     disabled={!canProceed()}
                     className="h-11 px-6 bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl shadow-lg shadow-primary/20"
                   >
-                    {currentStep === 6 ? "Finalizar" : "Continuar"}
+                    {currentStep === 7 ? "Finalizar" : "Continuar"}
                     <ChevronRight className="w-4 h-4 ml-1" />
                   </Button>
                 ) : (
@@ -1673,21 +1774,27 @@ export default function CriarCartaPage() {
               </div>
               
               {/* Card Preview or QR Preview */}
-              {(currentStep === 6 || currentStep === 7) && shareMethod === "qr" ? (
+              {(currentStep === 7 || currentStep === 8) && shareMethod === "qr" ? (
                 // QR Code Preview
                 <div className="relative w-full max-w-[180px] mx-auto">
                   <div className="bg-card rounded-2xl p-4 border border-border shadow-lg">
                     <div className={`aspect-square rounded-xl ${currentTheme.bg} border-2 ${currentTheme.border} flex items-center justify-center mb-3 relative overflow-hidden`}>
-                      <div className="w-24 h-24 bg-white rounded-lg p-2">
-                        <div className="w-full h-full grid grid-cols-5 gap-0.5">
-                          {Array.from({ length: 25 }).map((_, i) => (
-                            <div 
-                              key={i} 
-                              className={`${Math.random() > 0.5 ? "bg-gray-900" : "bg-transparent"} ${selectedQrStyle === "gradient" ? "bg-gradient-to-br from-primary to-primary/50" : ""}`}
-                            />
-                          ))}
+                      {generatedLink ? (
+                        <div className="bg-white rounded-lg p-1.5">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(generatedLink)}&margin=0`}
+                            alt="QR Code"
+                            width={100}
+                            height={100}
+                            className="rounded"
+                          />
                         </div>
-                      </div>
+                      ) : (
+                        <div className="w-24 h-24 bg-white/80 rounded-lg flex items-center justify-center">
+                          <QrCode className="w-12 h-12 text-gray-400" />
+                        </div>
+                      )}
                       {selectedQrStyle === "hearts" && (
                         <>
                           <Heart className={`absolute top-1 left-1 w-3 h-3 ${currentTheme.text} fill-current`} />
@@ -1873,20 +1980,26 @@ export default function CriarCartaPage() {
               <X className="w-4 h-4 text-foreground" />
             </button>
             
-            {(currentStep === 6 || currentStep === 7) && shareMethod === "qr" ? (
+            {(currentStep === 7 || currentStep === 8) && shareMethod === "qr" ? (
               // QR Code Preview Mobile
               <div className="bg-card rounded-2xl p-6 border border-border shadow-lg mx-auto max-w-[200px]">
                 <div className={`aspect-square rounded-xl ${currentTheme.bg} border-2 ${currentTheme.border} flex items-center justify-center mb-4 relative overflow-hidden`}>
-                  <div className="w-32 h-32 bg-white rounded-lg p-2">
-                    <div className="w-full h-full grid grid-cols-6 gap-0.5">
-                      {Array.from({ length: 36 }).map((_, i) => (
-                        <div 
-                          key={i} 
-                          className={`${Math.random() > 0.5 ? "bg-gray-900" : "bg-transparent"} ${selectedQrStyle === "gradient" ? "bg-gradient-to-br from-primary to-primary/50" : ""}`}
-                        />
-                      ))}
+                  {generatedLink ? (
+                    <div className="bg-white rounded-lg p-2">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(generatedLink)}&margin=0`}
+                        alt="QR Code"
+                        width={140}
+                        height={140}
+                        className="rounded"
+                      />
                     </div>
-                  </div>
+                  ) : (
+                    <div className="w-32 h-32 bg-white/80 rounded-lg flex items-center justify-center">
+                      <QrCode className="w-16 h-16 text-gray-400" />
+                    </div>
+                  )}
                   {selectedQrStyle === "hearts" && (
                     <>
                       <Heart className={`absolute top-2 left-2 w-4 h-4 ${currentTheme.text} fill-current`} />
